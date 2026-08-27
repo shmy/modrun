@@ -423,15 +423,8 @@ fn finish_run(phase: Result<()>, cleanup: Result<()>) -> Result<()> {
     }
 }
 
-async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>) -> Result<()> {
-    lifecycle.prepare_for_unwind();
-    match with_timeout(
-        stop_timeout,
-        lifecycle.unwind_started(),
-        Error::UnwindTimeout(stop_timeout.unwrap_or(Duration::ZERO)),
-    )
-    .await
-    {
+fn report_unwind_result(lifecycle: &Lifecycle, result: Result<()>) -> Result<()> {
+    match result {
         Ok(()) => {
             crate::trace::rolled_back();
             Ok(())
@@ -445,6 +438,29 @@ async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>
             Err(err)
         }
     }
+}
+
+async fn unwind_lifecycle(
+    lifecycle: &Lifecycle,
+    stop_timeout: Option<Duration>,
+    prepare: bool,
+) -> Result<()> {
+    if prepare {
+        lifecycle.prepare_for_unwind();
+    }
+    report_unwind_result(
+        lifecycle,
+        with_timeout(
+            stop_timeout,
+            lifecycle.unwind_started(),
+            Error::UnwindTimeout(stop_timeout.unwrap_or(Duration::ZERO)),
+        )
+        .await,
+    )
+}
+
+async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>) -> Result<()> {
+    unwind_lifecycle(lifecycle, stop_timeout, true).await
 }
 
 impl_wiring_methods!(ModrunBuilder);
@@ -467,20 +483,7 @@ struct BuiltApp {
 }
 
 async fn graceful_unwind(app: &BuiltApp) -> Result<()> {
-    match app.unwind_with_budget().await {
-        Ok(()) => {
-            crate::trace::rolled_back();
-            Ok(())
-        }
-        Err(err) => {
-            crate::trace::rollback_failed(&err);
-            let leftover = app.lifecycle.pending_stops();
-            if leftover > 0 {
-                crate::trace::hooks_abandoned(leftover);
-            }
-            Err(err)
-        }
-    }
+    unwind_lifecycle(&app.lifecycle, app.stop_timeout, false).await
 }
 
 async fn with_timeout(
@@ -516,16 +519,7 @@ impl BuiltApp {
             }
             Err(err) => {
                 crate::trace::rolling_back(&err);
-                let unwound = self.unwind_with_budget().await;
-                if let Err(ref unwind_err) = unwound {
-                    crate::trace::rollback_failed(unwind_err);
-                    let leftover = self.lifecycle.pending_stops();
-                    if leftover > 0 {
-                        crate::trace::hooks_abandoned(leftover);
-                    }
-                } else {
-                    crate::trace::rolled_back();
-                }
+                let unwound = unwind_lifecycle(&self.lifecycle, self.stop_timeout, false).await;
                 crate::trace::start_failed(&err);
                 combine_results(Err(err), unwound)
             }
@@ -539,25 +533,17 @@ impl BuiltApp {
             Error::StopTimeout(self.stop_timeout.unwrap_or(Duration::ZERO)),
         )
         .await;
-        if let Err(ref err) = result {
-            crate::trace::stop_failed(err);
-            let leftover = self.lifecycle.pending_stops();
-            if leftover > 0 {
-                crate::trace::hooks_abandoned(leftover);
+        match &result {
+            Err(err) => {
+                crate::trace::stop_failed(err);
+                let leftover = self.lifecycle.pending_stops();
+                if leftover > 0 {
+                    crate::trace::hooks_abandoned(leftover);
+                }
             }
-        } else {
-            crate::trace::stopped();
+            Ok(()) => crate::trace::stopped(),
         }
         result
-    }
-
-    async fn unwind_with_budget(&self) -> Result<()> {
-        with_timeout(
-            self.stop_timeout,
-            self.lifecycle.unwind_started(),
-            Error::UnwindTimeout(self.stop_timeout.unwrap_or(Duration::ZERO)),
-        )
-        .await
     }
 }
 

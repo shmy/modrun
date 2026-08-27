@@ -41,26 +41,46 @@ fn user_deps(deps: &[(TypeId, &'static str)]) -> String {
         .join(", ")
 }
 
+fn with_module(
+    module: Option<&'static str>,
+    root: impl FnOnce(),
+    named: impl FnOnce(&'static str),
+) {
+    match module {
+        Some(name) => named(name),
+        None => root(),
+    }
+}
+
+fn with_module_deps(
+    module: Option<&'static str>,
+    deps: &str,
+    root_no_deps: impl FnOnce(),
+    root_deps: impl FnOnce(),
+    named_no_deps: impl FnOnce(&'static str),
+    named_deps: impl FnOnce(&'static str),
+) {
+    match (module, deps.is_empty()) {
+        (Some(name), true) => named_no_deps(name),
+        (Some(name), false) => named_deps(name),
+        (None, true) => root_no_deps(),
+        (None, false) => root_deps(),
+    }
+}
+
 pub(crate) fn invoking(function: &str, deps: &[(TypeId, &'static str)], scope_name: &'static str) {
-    // `user_deps` allocates, so skip it entirely when nothing is listening.
     if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
         return;
     }
     let user_deps = user_deps(deps);
-    match (module_label(scope_name), user_deps.is_empty()) {
-        (Some(module), true) => {
-            tracing::info!(target: TARGET, function, module, "invoking");
-        }
-        (Some(module), false) => {
-            tracing::info!(target: TARGET, function, deps = user_deps, module, "invoking");
-        }
-        (None, true) => {
-            tracing::info!(target: TARGET, function, "invoking");
-        }
-        (None, false) => {
-            tracing::info!(target: TARGET, function, deps = user_deps, "invoking");
-        }
-    }
+    with_module_deps(
+        module_label(scope_name),
+        &user_deps,
+        || tracing::info!(target: TARGET, function, "invoking"),
+        || tracing::info!(target: TARGET, function, deps = user_deps, "invoking"),
+        |module| tracing::info!(target: TARGET, function, module, "invoking"),
+        |module| tracing::info!(target: TARGET, function, deps = user_deps, module, "invoking"),
+    );
 }
 
 pub(crate) fn invoke_failed(
@@ -73,17 +93,13 @@ pub(crate) fn invoke_failed(
         return;
     }
     let user_deps = user_deps(deps);
-    match module_label(scope_name) {
-        Some(module) if user_deps.is_empty() => {
-            tracing::error!(
-                target: TARGET,
-                error = %err,
-                function,
-                module,
-                "invoke failed"
-            );
-        }
-        Some(module) => {
+    with_module_deps(
+        module_label(scope_name),
+        &user_deps,
+        || tracing::error!(target: TARGET, error = %err, function, "invoke failed"),
+        || tracing::error!(target: TARGET, error = %err, function, deps = user_deps, "invoke failed"),
+        |module| tracing::error!(target: TARGET, error = %err, function, module, "invoke failed"),
+        |module| {
             tracing::error!(
                 target: TARGET,
                 error = %err,
@@ -91,64 +107,48 @@ pub(crate) fn invoke_failed(
                 deps = user_deps,
                 module,
                 "invoke failed"
-            );
-        }
-        None if user_deps.is_empty() => {
-            tracing::error!(
-                target: TARGET,
-                error = %err,
-                function,
-                "invoke failed"
-            );
-        }
-        None => {
-            tracing::error!(
-                target: TARGET,
-                error = %err,
-                function,
-                deps = user_deps,
-                "invoke failed"
-            );
-        }
-    }
+            )
+        },
+    );
+}
+
+fn log_type_event(type_name: &str, scope_name: &'static str, private: bool, event: &'static str) {
+    with_module(
+        module_label(scope_name),
+        || {
+            if private {
+                tracing::info!(target: TARGET, type_name, private, "{event}");
+            } else {
+                tracing::info!(target: TARGET, type_name, "{event}");
+            }
+        },
+        |module| {
+            if private {
+                tracing::info!(target: TARGET, type_name, module, private, "{event}");
+            } else {
+                tracing::info!(target: TARGET, type_name, module, "{event}");
+            }
+        },
+    );
 }
 
 pub(crate) fn provided(type_name: &str, scope_name: &'static str, private: bool) {
-    match module_label(scope_name) {
-        Some(module) if private => {
-            tracing::info!(target: TARGET, type_name, module, private, "provided");
-        }
-        Some(module) => {
-            tracing::info!(target: TARGET, type_name, module, "provided");
-        }
-        None if private => {
-            tracing::info!(target: TARGET, type_name, private, "provided");
-        }
-        None => {
-            tracing::info!(target: TARGET, type_name, "provided");
-        }
-    }
+    log_type_event(type_name, scope_name, private, "provided");
 }
 
 pub(crate) fn supplied(type_name: &str, scope_name: &'static str, private: bool) {
-    match module_label(scope_name) {
-        Some(module) if private => {
-            tracing::info!(target: TARGET, type_name, module, private, "supplied");
-        }
-        Some(module) => {
-            tracing::info!(target: TARGET, type_name, module, "supplied");
-        }
-        None if private => {
-            tracing::info!(target: TARGET, type_name, private, "supplied");
-        }
-        None => {
-            tracing::info!(target: TARGET, type_name, "supplied");
-        }
-    }
+    log_type_event(type_name, scope_name, private, "supplied");
+}
+
+fn log_construct_event(scope_name: &'static str, fields: impl FnOnce(Option<&'static str>)) {
+    fields(module_label(scope_name));
 }
 
 pub(crate) fn before_run(name: &str, scope_name: &'static str) {
-    match module_label(scope_name) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_construct_event(scope_name, |module| match module {
         Some(module) => {
             tracing::info!(
                 target: TARGET,
@@ -158,14 +158,15 @@ pub(crate) fn before_run(name: &str, scope_name: &'static str) {
                 "before run"
             );
         }
-        None => {
-            tracing::info!(target: TARGET, name, kind = "provide", "before run");
-        }
-    }
+        None => tracing::info!(target: TARGET, name, kind = "provide", "before run"),
+    });
 }
 
 pub(crate) fn run_ok(name: &str, scope_name: &'static str, runtime: Duration) {
-    match module_label(scope_name) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_construct_event(scope_name, |module| match module {
         Some(module) => {
             tracing::info!(
                 target: TARGET,
@@ -176,20 +177,21 @@ pub(crate) fn run_ok(name: &str, scope_name: &'static str, runtime: Duration) {
                 "run"
             );
         }
-        None => {
-            tracing::info!(
+        None => tracing::info!(
                 target: TARGET,
                 name,
                 kind = "provide",
                 runtime = ?runtime,
-                "run"
-            );
-        }
-    }
+            "run"
+        ),
+    });
 }
 
 pub(crate) fn run_err(name: &str, scope_name: &'static str, err: &crate::Error) {
-    match module_label(scope_name) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_construct_event(scope_name, |module| match module {
         Some(module) => {
             tracing::error!(
                 target: TARGET,
@@ -200,20 +202,21 @@ pub(crate) fn run_err(name: &str, scope_name: &'static str, err: &crate::Error) 
                 "error returned"
             );
         }
-        None => {
-            tracing::error!(
+        None => tracing::error!(
                 target: TARGET,
                 name,
                 kind = "provide",
                 error = %err,
-                "error returned"
-            );
-        }
-    }
+            "error returned"
+        ),
+    });
 }
 
 pub(crate) fn run_cancelled(name: &str, scope_name: &'static str) {
-    match module_label(scope_name) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_construct_event(scope_name, |module| match module {
         Some(module) => {
             tracing::error!(
                 target: TARGET,
@@ -223,26 +226,32 @@ pub(crate) fn run_cancelled(name: &str, scope_name: &'static str) {
                 "run cancelled"
             );
         }
-        None => {
-            tracing::error!(
-                target: TARGET,
-                name,
-                kind = "provide",
-                "run cancelled"
-            );
-        }
+        None => tracing::error!(target: TARGET, name, kind = "provide", "run cancelled"),
+    });
+}
+
+fn log_hook_event(_hook: usize, name: Option<&str>, fields: impl FnOnce(Option<&str>)) {
+    match name {
+        Some(name) => fields(Some(name)),
+        None => fields(None),
     }
 }
 
 pub(crate) fn on_start_executing(hook: usize, name: Option<&str>) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::info!(target: TARGET, hook, name, "OnStart hook executing"),
         None => tracing::info!(target: TARGET, hook, "OnStart hook executing"),
-    }
+    });
 }
 
 pub(crate) fn on_start_executed(hook: usize, name: Option<&str>, runtime: Duration) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::info!(
             target: TARGET,
             hook,
@@ -256,34 +265,46 @@ pub(crate) fn on_start_executed(hook: usize, name: Option<&str>, runtime: Durati
             runtime = ?runtime,
             "OnStart hook executed"
         ),
-    }
+    });
 }
 
 pub(crate) fn on_start_failed(hook: usize, name: Option<&str>, err: &crate::Error) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => {
             tracing::error!(target: TARGET, hook, name, error = %err, "OnStart hook failed")
         }
         None => tracing::error!(target: TARGET, hook, error = %err, "OnStart hook failed"),
-    }
+    });
 }
 
 pub(crate) fn on_start_cancelled(hook: usize, name: Option<&str>) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::error!(target: TARGET, hook, name, "OnStart hook cancelled"),
         None => tracing::error!(target: TARGET, hook, "OnStart hook cancelled"),
-    }
+    });
 }
 
 pub(crate) fn on_stop_executing(hook: usize, name: Option<&str>) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::info!(target: TARGET, hook, name, "OnStop hook executing"),
         None => tracing::info!(target: TARGET, hook, "OnStop hook executing"),
-    }
+    });
 }
 
 pub(crate) fn on_stop_executed(hook: usize, name: Option<&str>, runtime: Duration) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::info!(
             target: TARGET,
             hook,
@@ -297,23 +318,29 @@ pub(crate) fn on_stop_executed(hook: usize, name: Option<&str>, runtime: Duratio
             runtime = ?runtime,
             "OnStop hook executed"
         ),
-    }
+    });
 }
 
 pub(crate) fn on_stop_failed(hook: usize, name: Option<&str>, err: &crate::Error) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => {
             tracing::error!(target: TARGET, hook, name, error = %err, "OnStop hook failed")
         }
         None => tracing::error!(target: TARGET, hook, error = %err, "OnStop hook failed"),
-    }
+    });
 }
 
 pub(crate) fn on_stop_cancelled(hook: usize, name: Option<&str>) {
-    match name {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    log_hook_event(hook, name, |name| match name {
         Some(name) => tracing::error!(target: TARGET, hook, name, "OnStop hook cancelled"),
         None => tracing::error!(target: TARGET, hook, "OnStop hook cancelled"),
-    }
+    });
 }
 
 pub(crate) fn started() {

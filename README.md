@@ -129,9 +129,10 @@ later invoker fails, earlier constructors may already have run their side effect
 for that failed build call.
 
 Dependencies must be `Clone` to inject by value, because singletons are cached
-by type and cloned on inject. `Arc<T>` is registered as an alias, so a constructor
-that returns `T` can be injected as `Arc<T>` without `T: Clone`. Put shared
-mutable state behind an `Arc` inside your type:
+by type and cloned on inject. Prefer `Arc<T>` when a type is large, shared across
+many constructors, or injected more than once — `Arc<T>` is registered as an alias,
+so a constructor that returns `T` can be injected as `Arc<T>` without `T: Clone`.
+Put shared mutable state behind an `Arc` inside your type:
 
 ```rust
 use std::sync::Arc;

@@ -44,9 +44,10 @@
 //! ```
 //!
 //! Dependencies must be `Clone` to inject by value. Singletons are cached by
-//! type; `Arc<T>` is also stored, so you can inject `Arc<T>` even when `T`
-//! itself is not `Clone`. Put shared mutable state behind `Arc` inside your
-//! type, e.g. `#[derive(Clone)] struct Db(Arc<DbInner>)`.
+//! type and cloned on inject. Prefer `Arc<T>` when a type is large, shared across
+//! many constructors, or injected more than once — `Arc<T>` is also stored, so you
+//! can inject `Arc<T>` even when `T` itself is not `Clone`. Put shared mutable
+//! state behind `Arc` inside your type, e.g. `#[derive(Clone)] struct Db(Arc<DbInner>)`.
 //!
 //! Because the cache key is the type, a type can only be provided once. To wire
 //! two of the same thing — a primary and a replica pool, say — give each its own

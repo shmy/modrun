@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::error::aggregate_errors;
 use crate::future::BoxFuture;
+use crate::shutdown::Shutdowner;
 
 type Callback = Box<dyn FnOnce() -> BoxFuture<'static, Result<()>> + Send>;
 type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync>;
@@ -51,9 +52,10 @@ type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync
 ///
 /// For a background worker, use [`crate::task`]: OnStart spawns the work.
 /// For a server that must bind before the app is running, use
-/// [`crate::task_with`] so listen failures fail start. Call
-/// [`crate::Shutdowner::shutdown`] from `run` if a failure after start should
-/// unblock [`crate::ModrunBuilder::run`].
+/// [`crate::task_with`] so listen failures fail start. Both request
+/// [`crate::Shutdowner::shutdown`] if the background future fails or panics,
+/// so [`crate::ModrunBuilder::run`] does not wait forever. Custom hooks that
+/// spawn their own tasks still need to call `shutdown()` themselves.
 ///
 /// Hook futures must be cancellation-safe: a timeout drops the in-progress
 /// future. Any task spawned by a hook must be tracked and shut down explicitly
@@ -116,6 +118,14 @@ pub trait Hook: Send + 'static {
     fn on_stop(&mut self) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }
     }
+
+    /// Receives the process [`Shutdowner`] when the hook is
+    /// [`Lifecycle::append`]ed.
+    ///
+    /// [`crate::task`] uses this so a background failure unblocks
+    /// [`crate::ModrunBuilder::run`]. Custom hooks that spawn their own work
+    /// can store it the same way.
+    fn attach_shutdown(&mut self, _shutdown: Shutdowner) {}
 }
 
 /// Ad-hoc start/stop callbacks. Prefer implementing [`Hook`] when the two
@@ -333,7 +343,10 @@ impl StopGuard {
         let started_at = crate::trace::start_timer();
         let result = {
             let hook = self.hook.as_mut().expect("hook present");
-            hook.on_stop().await
+            match hook.on_stop().await {
+                Ok(()) => Ok(()),
+                Err(err) => Err(err.with_hook_name(self.name)),
+            }
         };
         match &result {
             Ok(()) => crate::trace::on_stop_executed(
@@ -393,6 +406,7 @@ struct State {
 #[derive(Clone)]
 pub struct Lifecycle {
     inner: Arc<Mutex<State>>,
+    shutdown: Shutdowner,
 }
 
 impl std::fmt::Debug for Lifecycle {
@@ -407,13 +421,14 @@ impl std::fmt::Debug for Lifecycle {
 }
 
 impl Lifecycle {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(shutdown: Shutdowner) -> Self {
         Self {
             inner: Arc::new(Mutex::new(State {
                 hooks: Vec::new(),
                 started: 0,
                 phase: Phase::Registering,
             })),
+            shutdown,
         }
     }
 
@@ -434,7 +449,8 @@ impl Lifecycle {
     ///
     /// Returns an error when start has already finished or stop/unwind has
     /// begun — appended hooks would never run.
-    pub fn append<H: Hook>(&self, hook: H) -> Result<()> {
+    pub fn append<H: Hook>(&self, mut hook: H) -> Result<()> {
+        hook.attach_shutdown(self.shutdown.clone());
         let mut state = self.state();
         match state.phase {
             Phase::Registering | Phase::Starting => {
@@ -513,6 +529,7 @@ impl Lifecycle {
                     state.started += 1;
                 }
                 Err(err) => {
+                    let err = err.with_hook_name(name);
                     inflight.fail(&err);
                     // Drop `hook` without putting it back — its OnStop must not run.
                     self.reject_append_and_activate_trailing();
@@ -634,12 +651,13 @@ impl Lifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shutdown::Shutdowner;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[tokio::test]
     async fn stop_guard_writes_back_cancelled_on_stop() {
-        let lc = Lifecycle::new();
+        let lc = Lifecycle::new(Shutdowner::new());
         let log = Arc::new(Mutex::new(Vec::new()));
         let l = Arc::clone(&log);
         let l2 = Arc::clone(&l);
@@ -668,7 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_for_unwind_runs_stop_only_after_unstarted_hooks() {
-        let lc = Lifecycle::new();
+        let lc = Lifecycle::new(Shutdowner::new());
         let log = Arc::new(Mutex::new(Vec::new()));
         let started = Arc::clone(&log);
         let stopped = Arc::clone(&log);

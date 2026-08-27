@@ -25,3 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `std::io::Error` no longer converts with `From`. Use [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) with a context label.
 * Panic during invoke / construct / OnStart / OnStop is traced as `panicked`, not `cancelled`.
 * Background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) join failures include the task name.
+* [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) / [`task_with`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) request [`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html) when the background future returns `Err` or panics, so `run()` does not wait forever for a signal.
+* Named lifecycle hooks and fallible invokers include their name in [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html) (`hook 'http' failed`, `invoker my::boot failed`).
+
+### Fixed
+
+* OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.

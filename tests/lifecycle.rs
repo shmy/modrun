@@ -107,6 +107,28 @@ async fn start_failure_runs_stop_for_started_hooks() {
 }
 
 #[tokio::test]
+async fn named_start_hook_error_includes_name() {
+    fn boot(lc: Lifecycle) {
+        lc.append(
+            hook()
+                .name("http")
+                .on_start(|| async { Err(Error::hook("boom")) }),
+        )
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("http"), "unexpected: {msg}");
+    assert!(msg.contains("boom"), "unexpected: {msg}");
+}
+
+#[tokio::test]
 async fn hook_order_start_fifo_stop_lifo() {
     #[derive(Clone)]
     struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);

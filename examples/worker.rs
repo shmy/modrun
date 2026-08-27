@@ -2,8 +2,8 @@
 //!
 //! Mirrors a typical SQL primary/replica + worker shape without extra crates.
 //! The worker loop selects on [`modrun::Stopped`] so OnStop is graceful rather
-//! than an abort. If this work can fail on its own, call [`modrun::Shutdowner`]
-//! (see the axum example) so `run()` does not wait forever for a signal.
+//! than an abort. If this work returns `Err` or panics, [`modrun::task`]
+//! requests shutdown on its own so `run()` does not wait forever for a signal.
 //!
 //! ```bash
 //! cargo run --example worker

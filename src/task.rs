@@ -7,6 +7,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::{Error, Result};
 use crate::lifecycle::Hook;
+use crate::shutdown::Shutdowner;
 
 /// Completes when the matching [`Task`] / [`PreparedTask`] begins OnStop (or is
 /// dropped).
@@ -47,6 +48,8 @@ struct LiveTask {
     name: &'static str,
     stop_tx: Option<oneshot::Sender<()>>,
     handle: Option<JoinHandle<Result<()>>>,
+    work_abort: Option<tokio::task::AbortHandle>,
+    shutdown: Option<Shutdowner>,
 }
 
 impl LiveTask {
@@ -55,6 +58,8 @@ impl LiveTask {
             name,
             stop_tx: None,
             handle: None,
+            work_abort: None,
+            shutdown: None,
         }
     }
 
@@ -65,7 +70,28 @@ impl LiveTask {
     {
         let (stop_tx, stop_rx) = oneshot::channel();
         self.stop_tx = Some(stop_tx);
-        self.handle = Some(tokio::spawn(run(Stopped { rx: stop_rx })));
+        let name = self.name;
+        let shutdown = self.shutdown.clone();
+        let work = tokio::spawn(run(Stopped { rx: stop_rx }));
+        self.work_abort = Some(work.abort_handle());
+        self.handle = Some(tokio::spawn(async move {
+            match work.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(err)) => {
+                    if let Some(shutdown) = shutdown {
+                        shutdown.shutdown();
+                    }
+                    Err(err)
+                }
+                Err(err) if err.is_cancelled() => Ok(()),
+                Err(err) => {
+                    if let Some(shutdown) = shutdown {
+                        shutdown.shutdown();
+                    }
+                    Err(Error::hook(TaskJoinError { name, source: err }))
+                }
+            }
+        }));
     }
 
     async fn on_stop(&mut self) -> Result<()> {
@@ -90,6 +116,9 @@ impl Drop for LiveTask {
     fn drop(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
+        }
+        if let Some(abort) = self.work_abort.take() {
+            abort.abort();
         }
         if let Some(handle) = self.handle.take() {
             handle.abort();
@@ -144,9 +173,10 @@ pub struct PreparedTask<P, R> {
 /// port inside `run` — that failure would only show up on stop. Use
 /// [`task_with`] so listen happens during OnStart.
 ///
-/// If `run` can fail after start has already succeeded, call
-/// [`crate::Shutdowner::shutdown`] so [`crate::ModrunBuilder::run`] does not wait
-/// forever for a signal.
+/// If `run` returns `Err` or panics after start has succeeded,
+/// [`crate::Shutdowner::shutdown`] is requested automatically so
+/// [`crate::ModrunBuilder::run`] does not wait forever for a signal.
+/// Returning `Ok(())` (including after [`Stopped`]) does not shut the app down.
 ///
 /// ```
 /// use modrun::{Lifecycle, Modrun, task};
@@ -185,23 +215,19 @@ where
 ///
 /// Use this for servers: bind/listen in `prepare` so `AddrInUse` fails start.
 /// `run` then receives the prepared value and a [`Stopped`] future.
+/// A `run` error or panic requests shutdown the same way as [`task`].
 ///
 /// ```
-/// use modrun::{Lifecycle, Modrun, Shutdowner, task_with};
+/// use modrun::{Lifecycle, Modrun, task_with};
 ///
-/// fn boot(lc: Lifecycle, shutdown: Shutdowner) -> modrun::Result<()> {
+/// fn boot(lc: Lifecycle) -> modrun::Result<()> {
 ///     lc.append(task_with(
 ///         "http.serve",
 ///         || async { Ok(()) },
-///         move |(), stopped| async move {
+///         |(), stopped| async move {
 ///             tokio::select! {
 ///                 _ = stopped => Ok(()),
-///                 result = serve() => {
-///                     if result.is_err() {
-///                         shutdown.shutdown();
-///                     }
-///                     result
-///                 }
+///                 result = serve() => result,
 ///             }
 ///         },
 ///     ))
@@ -262,6 +288,10 @@ where
         Some(self.live.name)
     }
 
+    fn attach_shutdown(&mut self, shutdown: Shutdowner) {
+        self.live.shutdown = Some(shutdown);
+    }
+
     fn on_start(&mut self) -> impl Future<Output = Result<()>> + Send {
         let run = self.start.take().expect("task OnStart ran twice");
         // Spawn before returning so a cancelled OnStart still drops `self`
@@ -285,6 +315,10 @@ where
 {
     fn name(&self) -> Option<&'static str> {
         Some(self.live.name)
+    }
+
+    fn attach_shutdown(&mut self, shutdown: Shutdowner) {
+        self.live.shutdown = Some(shutdown);
     }
 
     async fn on_start(&mut self) -> Result<()> {

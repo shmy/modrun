@@ -270,8 +270,9 @@ impl ModrunBuilder {
     /// Cancellation is cooperative (same as [`build_timeout`](Self::build_timeout)):
     /// the in-flight future is dropped at its next `.await`. After start
     /// succeeds, this future waits until a signal or [`Shutdowner::shutdown`].
-    /// A background [`crate::task`] that fails on its own must call `shutdown()`
-    /// or `run` waits forever for an OS signal.
+    /// A background [`crate::task`] that fails or panics requests shutdown on
+    /// its own. Custom work spawned with [`tokio::spawn`] must still call
+    /// [`Shutdowner::shutdown`] or `run` waits forever for an OS signal.
     ///
     /// # Errors
     ///
@@ -285,8 +286,8 @@ impl ModrunBuilder {
     /// `panicked`, but lifecycle unwind may not run.
     pub async fn run(self) -> Result<()> {
         self.print_banner();
-        let lifecycle = Lifecycle::new();
         let shutdown = Shutdowner::new();
+        let lifecycle = Lifecycle::new(shutdown.clone());
         let mut signals = SignalWatch::install()?;
 
         let mut state = self.into_build_state(lifecycle.clone(), shutdown.clone())?;
@@ -380,8 +381,8 @@ impl ModrunBuilder {
     /// not converted into [`Error`] and may skip lifecycle unwind.
     pub async fn start(self) -> Result<RunningApp> {
         self.print_banner();
-        let lifecycle = Lifecycle::new();
         let shutdown = Shutdowner::new();
+        let lifecycle = Lifecycle::new(shutdown.clone());
         let mut state = self.into_build_state(lifecycle.clone(), shutdown)?;
         let stop_timeout = state.stop_timeout;
         if let Err(e) = run_invokers(&mut state).await {
@@ -680,18 +681,20 @@ impl SignalWatch {
         #[cfg(all(feature = "signal", unix))]
         {
             tokio::select! {
-                _ = self.sigint.recv() => "SIGINT",
-                _ = self.sigterm.recv() => "SIGTERM",
+                Some(()) = self.sigint.recv() => "SIGINT",
+                Some(()) = self.sigterm.recv() => "SIGTERM",
+                else => std::future::pending().await,
             }
         }
 
         #[cfg(all(feature = "signal", windows))]
         {
             tokio::select! {
-                _ = self.ctrl_c.recv() => "CTRL_C",
-                _ = self.ctrl_break.recv() => "CTRL_BREAK",
-                _ = self.ctrl_close.recv() => "CTRL_CLOSE",
-                _ = self.ctrl_shutdown.recv() => "CTRL_SHUTDOWN",
+                Some(()) = self.ctrl_c.recv() => "CTRL_C",
+                Some(()) = self.ctrl_break.recv() => "CTRL_BREAK",
+                Some(()) = self.ctrl_close.recv() => "CTRL_CLOSE",
+                Some(()) = self.ctrl_shutdown.recv() => "CTRL_SHUTDOWN",
+                else => std::future::pending().await,
             }
         }
 

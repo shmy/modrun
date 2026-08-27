@@ -85,9 +85,9 @@ Hook 和构造函数错误使用 [`Error`](https://docs.rs/modrun/latest/modrun/
 给 hook 一个 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
 用于日志。构造函数和 invoker 最多八个参数；多出来的依赖收进一个结构体，不要把参数个数拉长。
 
-Hook 的 future 必须是 cancellation-safe 的。start/stop 超时会 drop 正在进行的 future，但 **不能** 取消 `tokio::spawn` 出去的脱离任务。Worker 用 [`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html)；bind/listen 必须在 OnStart 里完成时用 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html)（见 axum 示例）。两者都会在 OnStop 时打出 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html)、join，并在 hook 中途被 drop 时 abort。若后台工作在 start 已经成功之后失败，调用
-[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)，
-否则 `run()` 会一直等信号。Hook 里 panic 视为致命的编程错误，可能跳过生命周期 unwind（日志为 `panicked`）。
+Hook 的 future 必须是 cancellation-safe 的。start/stop 超时会 drop 正在进行的 future，但 **不能** 取消 `tokio::spawn` 出去的脱离任务。Worker 用 [`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html)；bind/listen 必须在 OnStart 里完成时用 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html)（见 axum 示例）。两者都会在 OnStop 时打出 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html)、join，并在 hook 中途被 drop 时 abort。后台工作在 start 已经成功之后返回 `Err` 或 panic 时会自动请求 shutdown，这样 `run()` 不会一直等信号。用 `tokio::spawn` 自己拉起的任务仍须调用
+[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)。
+Hook 里 panic 视为致命的编程错误，可能跳过生命周期 unwind（日志为 `panicked`）。
 
 **`Shutdowner`** 同样自动注入。在应用内部调用 `shutdown()` 会解开 `run()`，用来响应信号以外的停机原因。构建/启动阶段的取消同样是协作式的（下一个 `.await`）。
 
@@ -201,7 +201,7 @@ Modrun::builder()
 `run()` 把构建或启动阶段的 Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 当成优雅退出：unwind 已经启动的 hook 以及已注册的 stop-only hook，清理成功则返回 `Ok(())`。
 若该阶段已经失败，`run()` 仍返回那次失败。
-Shutdown 和 OS 信号与超时一样是协作式的：在下一个 `.await` 才生效，所以同步 OnStart 里调用 `shutdown()` 不会跳过后面尚未让出的 hook。进入 `RUNNING` 之后，`run()` 会等到信号或 `Shutdowner::shutdown()`；后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 自己失败时必须调用 `shutdown()`，否则会一直等。构造函数、invoker 或 hook 里的 panic 不会变成 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)，并可能跳过生命周期 unwind（tracing 记为 `panicked`）。
+Shutdown 和 OS 信号与超时一样是协作式的：在下一个 `.await` 才生效，所以同步 OnStart 里调用 `shutdown()` 不会跳过后面尚未让出的 hook。进入 `RUNNING` 之后，`run()` 会等到信号或 `Shutdowner::shutdown()`；后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 失败或 panic 会自动请求 shutdown。用 `tokio::spawn` 自己拉起的任务仍须调用 `shutdown()`，否则会一直等。构造函数、invoker 或 hook 里的 panic 不会变成 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)，并可能跳过生命周期 unwind（tracing 记为 `panicked`）。
 
 ## 测试
 
@@ -286,10 +286,13 @@ hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默�
 * `dependency cycle detected involving: A -> B -> A`
 * `application start timed out after 15s`
 * `application stop timed out after 15s while unwinding`
+* `invoker my::boot failed: …`
+* `hook 'http.serve' failed: …`
 
 构造函数和 hook 失败会把原始错误留在
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source)。
-多个 OnStop 失败会聚合成 [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html)。
+有名字的 hook 会把 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+写进 Display（`task` 总有名字）。多个 OnStop 失败会聚合成 [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html)。
 若更早阶段已经失败、unwind 又失败，两者都保留在
 [`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html) 上。
 

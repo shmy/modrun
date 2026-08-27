@@ -130,11 +130,14 @@ future, but it cannot cancel detached tasks created with `tokio::spawn`. Prefer
 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) when
 bind/listen must finish during OnStart (see the axum example). Both signal
 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html) on OnStop,
-join, and abort if the hook is dropped mid-flight. If background work fails
-after start has already succeeded, call
-[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)
-so `run()` does not wait forever for a signal. Hook panics are treated as fatal
-programming errors and may bypass lifecycle unwind (logged as `panicked`).
+join, and abort if the hook is dropped mid-flight. If that background work
+returns `Err` or panics after start has succeeded, shutdown is requested
+automatically so `run()` does not wait forever for a signal. Custom tasks
+spawned with [`tokio::spawn`](https://docs.rs/tokio/latest/tokio/fn.spawn.html)
+must still call
+[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown).
+Hook panics are treated as fatal programming errors and may bypass lifecycle
+unwind (logged as `panicked`).
 
 **`Shutdowner`** is also injected automatically. Calling `shutdown()` unblocks `run()`
 from inside the app, which is how you shut down in response to something other than a
@@ -293,7 +296,9 @@ Shutdown and OS signals are cooperative in the same way as timeouts: they take
 effect at the next `.await`, so a `shutdown()` from a synchronous OnStart does
 not skip later hooks that have not yet yielded. After `RUNNING`, `run()` waits
 until a signal or `Shutdowner::shutdown()`; a background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html)
-that fails must call `shutdown()` or `run()` waits forever. A panic in a
+that fails or panics requests shutdown on its own. Work spawned with
+[`tokio::spawn`](https://docs.rs/tokio/latest/tokio/fn.spawn.html) must still
+call `shutdown()` or `run()` waits forever. A panic in a
 constructor, invoker, or hook is not converted into [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)
 and may skip lifecycle unwind (tracing records it as `panicked`).
 
@@ -385,10 +390,13 @@ Graph problems fail before constructors run. Typical `Display` text:
 * `dependency cycle detected involving: A -> B -> A`
 * `application start timed out after 15s`
 * `application stop timed out after 15s while unwinding`
+* `invoker my::boot failed: …`
+* `hook 'http.serve' failed: …`
 
 Constructor and hook failures keep the original error on
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source).
-Several OnStop failures become [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html).
+Named hooks include [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+in the display (`task` always has one). Several OnStop failures become [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html).
 If unwind fails after an earlier phase error, both are retained on
 [`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html).
 

@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
-use modrun::{Error, Lifecycle, Modrun, Module, Shutdowner, task_with};
+use modrun::{Error, Lifecycle, Modrun, Module, task_with};
 
 #[derive(Clone)]
 struct Config {
@@ -51,12 +51,7 @@ async fn hello(State(state): State<AppState>, Path(name): Path<String>) -> Strin
     format!("{}, {name}!\n", state.greeter.prefix)
 }
 
-fn register_http(
-    lc: Lifecycle,
-    cfg: Config,
-    state: AppState,
-    shutdown: Shutdowner,
-) -> modrun::Result<()> {
+fn register_http(lc: Lifecycle, cfg: Config, state: AppState) -> modrun::Result<()> {
     let addr = cfg.addr;
     lc.append(task_with(
         "http.serve",
@@ -72,15 +67,10 @@ fn register_http(
                 .route("/", get(index))
                 .route("/hello/{name}", get(hello))
                 .with_state(state);
-            let result = axum::serve(listener, app)
+            axum::serve(listener, app)
                 .with_graceful_shutdown(stopped)
-                .await;
-            if result.is_err() {
-                // Unblock `run()` so OnStop can surface the server error
-                // instead of waiting forever for an external signal.
-                shutdown.shutdown();
-            }
-            result.map_err(|e| Error::io(format!("serve {addr}"), e))
+                .await
+                .map_err(|e| Error::io(format!("serve {addr}"), e))
         },
     ))
 }

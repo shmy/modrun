@@ -171,7 +171,7 @@ macro_rules! impl_invoke_zero {
 
             fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                InvokeOut::Done(func().map_err(user_invoke_err))
+                InvokeOut::Done(func().map_err(|err| user_invoke_err(self.name, err)))
             }
         }
 
@@ -278,7 +278,7 @@ macro_rules! impl_invoke_fn {
                     func(
                         $(container.get::<$A>()?,)+
                     )
-                    .map_err(user_invoke_err)
+                    .map_err(|err| user_invoke_err(self.name, err))
                 })())
             }
         }
@@ -409,9 +409,10 @@ macro_rules! impl_async_invoke_zero {
 
             fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                InvokeOut::Fut(Box::pin(
-                    async move { func().await.map_err(user_invoke_err) },
-                ))
+                let name = self.name;
+                InvokeOut::Fut(Box::pin(async move {
+                    func().await.map_err(|err| user_invoke_err(name, err))
+                }))
             }
         }
 
@@ -528,9 +529,14 @@ macro_rules! impl_async_invoke_fn {
                         $(container.get::<$A>()?,)+
                     ))
                 })() {
-                    Ok(future) => InvokeOut::Fut(Box::pin(async move {
-                        future.await.map_err(user_invoke_err)
-                    })),
+                    Ok(future) => {
+                        let name = self.name;
+                        InvokeOut::Fut(Box::pin(async move {
+                            future
+                                .await
+                                .map_err(|err| user_invoke_err(name, err))
+                        }))
+                    }
                     Err(err) => InvokeOut::Done(Err(err)),
                 }
             }

@@ -77,8 +77,10 @@ pub enum Error {
     },
 
     /// A fallible invoker returned an error.
-    #[error("invoker failed: {source}")]
+    #[error("invoker {name} failed: {source}")]
     InvokerFailed {
+        /// Rust type name of the invoker function.
+        name: &'static str,
         /// The user error from the invoker.
         #[source]
         source: BoxError,
@@ -137,8 +139,15 @@ pub enum Error {
     /// An application hook returned this failure.
     ///
     /// Prefer [`Error::hook`] rather than constructing this variant directly.
-    #[error("hook failed: {0}")]
-    Hook(#[source] BoxError),
+    /// [`crate::Lifecycle`] fills in [`Self::Hook::name`] when the hook has one.
+    #[error("{}", hook_failed_message(.name, .source))]
+    Hook {
+        /// [`crate::Hook::name`] when known.
+        name: Option<&'static str>,
+        /// The user error from the hook.
+        #[source]
+        source: BoxError,
+    },
 
     /// I/O failure with a short context label (e.g. bind / serve).
     ///
@@ -201,8 +210,33 @@ impl Error {
     ///
     /// Accepts anything convertible to [`BoxError`], including `&str`, `String`,
     /// [`std::io::Error`], and types that implement [`std::error::Error`].
+    /// [`crate::Lifecycle`] attaches [`Hook::name`](crate::Hook::name) when the
+    /// hook has one, so the returned [`Error::Hook`] display includes that label.
     pub fn hook(err: impl Into<BoxError>) -> Self {
-        Self::Hook(err.into())
+        Self::Hook {
+            name: None,
+            source: err.into(),
+        }
+    }
+
+    /// Attach a hook name when the failure came from a named lifecycle hook.
+    pub(crate) fn with_hook_name(self, name: Option<&'static str>) -> Self {
+        match self {
+            Self::Hook {
+                source,
+                name: existing,
+            } => Self::Hook {
+                name: name.or(existing),
+                source,
+            },
+            other => match name {
+                None => other,
+                Some(name) => Self::Hook {
+                    name: Some(name),
+                    source: Box::new(other),
+                },
+            },
+        }
     }
 
     /// Wrap an I/O failure with a short context label (e.g. `"bind 127.0.0.1:3000"`).
@@ -223,8 +257,11 @@ impl Error {
         }
     }
 
-    pub(crate) fn invoker_failed(err: impl Into<BoxError>) -> Self {
-        Self::InvokerFailed { source: err.into() }
+    pub(crate) fn invoker_failed(name: &'static str, err: impl Into<BoxError>) -> Self {
+        Self::InvokerFailed {
+            name,
+            source: err.into(),
+        }
     }
 
     pub(crate) fn multiple_stop(errors: Vec<Error>) -> Self {
@@ -247,8 +284,15 @@ pub(crate) fn user_ctor_err<T: ?Sized>(err: impl Into<BoxError>) -> Error {
     Error::constructor_failed::<T>(err)
 }
 
-pub(crate) fn user_invoke_err(err: impl Into<BoxError>) -> Error {
-    Error::invoker_failed(err)
+pub(crate) fn user_invoke_err(name: &'static str, err: impl Into<BoxError>) -> Error {
+    Error::invoker_failed(name, err)
+}
+
+fn hook_failed_message(name: &Option<&'static str>, source: &BoxError) -> String {
+    match name {
+        Some(name) => format!("hook '{name}' failed: {source}"),
+        None => format!("hook failed: {source}"),
+    }
 }
 
 /// Aggregate multiple hook failures into a single error.
@@ -366,5 +410,37 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("boom"), "unexpected: {msg}");
         assert!(msg.contains("hook failed"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn with_hook_name_labels_unnamed_hook() {
+        let err = Error::hook("boom").with_hook_name(Some("http"));
+        match &err {
+            Error::Hook { name, .. } => assert_eq!(*name, Some("http")),
+            other => panic!("expected Hook, got {other}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("http"), "unexpected: {msg}");
+        assert!(msg.contains("boom"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn with_hook_name_wraps_io() {
+        let err = Error::io("bind", std::io::Error::other("addr in use"))
+            .with_hook_name(Some("http.serve"));
+        let msg = err.to_string();
+        assert!(msg.contains("http.serve"), "unexpected: {msg}");
+        assert!(msg.contains("bind"), "unexpected: {msg}");
+        assert!(StdError::source(&err).is_some());
+    }
+
+    #[test]
+    fn invoker_failed_includes_function_name() {
+        let err = Error::invoker_failed("boot", "nope");
+        let msg = err.to_string();
+        assert!(msg.contains("boot"), "unexpected: {msg}");
+        assert!(msg.contains("nope"), "unexpected: {msg}");
+        let src = StdError::source(&err).expect("source");
+        assert!(src.to_string().contains("nope"), "source was {src}");
     }
 }

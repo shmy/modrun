@@ -15,9 +15,11 @@ use tokio::sync::Notify;
 /// dropped at its next `.await`. A call from a synchronous OnStart does not skip
 /// later hooks that have not yet yielded.
 ///
-/// After the app is running, a background [`crate::task`] that can fail on its
-/// own should call [`shutdown`](Self::shutdown); otherwise `run()` waits forever
-/// for an OS signal.
+/// After the app is running, a background [`crate::task`] that fails or panics
+/// requests shutdown on its own. Custom work spawned with [`tokio::spawn`]
+/// should still call [`shutdown`](Self::shutdown); otherwise
+/// [`ModrunBuilder::run`](crate::ModrunBuilder::run) waits forever for an OS
+/// signal.
 #[derive(Clone)]
 pub struct Shutdowner {
     inner: Arc<Inner>,

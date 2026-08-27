@@ -265,9 +265,10 @@ async fn fallible_invoker_error_is_contextualized() {
     let err = Modrun::builder().invoke(boom).start().await.unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("invoker failed") && msg.contains("nope"),
+        msg.contains("invoker") && msg.contains("failed") && msg.contains("nope"),
         "unexpected: {msg}"
     );
+    assert!(msg.contains("boom"), "unexpected: {msg}");
     let src = std::error::Error::source(&err).expect("source");
     assert!(src.to_string().contains("nope"), "source was {src}");
 }

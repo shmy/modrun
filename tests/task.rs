@@ -96,12 +96,9 @@ async fn task_abort_on_stop_timeout() {
 }
 
 #[tokio::test]
-async fn task_failure_can_request_shutdown() {
-    fn boot(lc: Lifecycle, shutdown: modrun::Shutdowner) -> modrun::Result<()> {
-        lc.append(task("die", move |_stopped| async move {
-            shutdown.shutdown();
-            Err(Error::hook("died"))
-        }))
+async fn task_error_unblocks_run_without_manual_shutdown() {
+    fn boot(lc: Lifecycle) -> modrun::Result<()> {
+        lc.append(task("die", |_stopped| async { Err(Error::hook("died")) }))
     }
 
     let err = Modrun::builder()
@@ -110,7 +107,32 @@ async fn task_failure_can_request_shutdown() {
         .run()
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("died"), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("died"), "{err}");
+    assert!(msg.contains("die"), "{err}");
+}
+
+#[tokio::test]
+async fn task_panic_unblocks_run() {
+    fn boot(lc: Lifecycle) -> modrun::Result<()> {
+        lc.append(task("worker", |_stopped| async {
+            panic!("task-boom");
+        }))
+    }
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(2),
+        Modrun::builder().no_banner().invoke(boot).run(),
+    )
+    .await
+    .expect("run should unblock after task panic")
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("worker"), "{msg}");
+    assert!(
+        msg.contains("panicked") || msg.contains("task-boom"),
+        "{msg}"
+    );
 }
 
 #[tokio::test]

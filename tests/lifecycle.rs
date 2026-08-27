@@ -129,6 +129,29 @@ async fn named_start_hook_error_includes_name() {
 }
 
 #[tokio::test]
+async fn named_start_hook_io_stays_io() {
+    fn boot(lc: Lifecycle) {
+        lc.append(
+            hook().name("http").on_start(|| async {
+                Err(Error::io("bind", std::io::Error::other("addr in use")))
+            }),
+        )
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    match err {
+        Error::Io { context, .. } => assert_eq!(context, "bind"),
+        other => panic!("expected Io, got {other}"),
+    }
+}
+
+#[tokio::test]
 async fn hook_order_start_fifo_stop_lifo() {
     #[derive(Clone)]
     struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);

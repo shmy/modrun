@@ -264,8 +264,9 @@ impl ModrunBuilder {
     /// and unwinds hooks that already started, plus any stop-only hooks already
     /// registered (even if OnStart never ran). If cleanup succeeds, `run`
     /// returns `Ok(())` so process managers treat it as a graceful stop rather
-    /// than a crash. A timeout or hook failure still returns an error — a
-    /// concurrent shutdown does not turn that failure into `Ok(())`.
+    /// than a crash. A timeout, hook failure, or background [`crate::task`]
+    /// failure still returns an error — a concurrent graceful shutdown does not
+    /// turn that failure into `Ok(())`.
     ///
     /// Cancellation is cooperative (same as [`build_timeout`](Self::build_timeout)):
     /// the in-flight future is dropped at its next `.await`. After start
@@ -306,8 +307,8 @@ impl ModrunBuilder {
             },
             _ = shutdown.wait() => {
                 crate::trace::shutdown_requested();
-                return finish_run(
-                    Ok(()),
+                return finish_interrupt(
+                    &shutdown,
                     unwind_registered(&lifecycle, stop_timeout).await,
                 );
             }
@@ -330,7 +331,7 @@ impl ModrunBuilder {
             _ = shutdown.wait() => {
                 crate::trace::shutdown_requested();
                 crate::trace::rolling_back_after_shutdown();
-                return finish_run(Ok(()), graceful_unwind(&app).await);
+                return finish_interrupt(&shutdown, graceful_unwind(&app).await);
             }
             signal = signals.recv() => {
                 crate::trace::received_signal(signal);
@@ -368,6 +369,12 @@ impl ModrunBuilder {
     ///
     /// Does not install Ctrl-C / SIGTERM handlers; call [`RunningApp::stop`]
     /// yourself (or use [`ModrunBuilder::run`](Self::run) for signal-driven stop).
+    ///
+    /// A background [`crate::task`] that fails after its OnStart has returned
+    /// does **not** cancel remaining start hooks or fail this call. Poll
+    /// [`Shutdowner::is_requested`] / [`Shutdowner::wait`], or call
+    /// [`RunningApp::stop`], to observe it. [`run`](Self::run) tears the
+    /// process down when a worker fails.
     ///
     /// # Errors
     ///
@@ -504,6 +511,20 @@ fn finish_run(phase: Result<()>, cleanup: Result<()>) -> Result<()> {
     match phase {
         Ok(()) => cleanup,
         Err(e) => Err(with_cleanup(e, cleanup)),
+    }
+}
+
+/// [`Shutdowner::shutdown`] during build/start is a graceful `Ok(())`.
+/// A background [`crate::task`] failure is not: prefer the unwind join error,
+/// or [`Error::TaskFailedDuringStart`] if unwind reported success.
+fn finish_interrupt(shutdown: &Shutdowner, cleanup: Result<()>) -> Result<()> {
+    if shutdown.is_failure() {
+        match cleanup {
+            Ok(()) => Err(Error::TaskFailedDuringStart),
+            Err(e) => Err(e),
+        }
+    } else {
+        cleanup
     }
 }
 

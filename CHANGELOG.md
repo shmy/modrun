@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Panic during invoke / construct / OnStart / OnStop is traced as `panicked`, not `cancelled`.
 * Background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) join failures include the task name.
 * [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) / [`task_with`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) request [`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html) when the background future returns `Err` or panics, so `run()` does not wait forever for a signal.
-* Named lifecycle hooks and fallible invokers include their name in [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html) (`hook 'http' failed`, `invoker my::boot failed`).
+* Named lifecycle hooks and fallible invokers include their name in [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html) (`hook 'http' failed`, `invoker my::boot failed`). [`Error::Io`](https://docs.rs/modrun/latest/modrun/enum.Error.html) and other non-`Hook` variants keep their identity.
+* A [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) failure during start is an error from [`run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run), not a graceful `Ok(())`. [`start`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.start) still succeeds; observe the failure from `stop()` or [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html).
 
 ### Fixed
 

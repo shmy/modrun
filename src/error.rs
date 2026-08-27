@@ -110,6 +110,11 @@ pub enum Error {
     #[error("application stop timed out after {0:?} while unwinding")]
     UnwindTimeout(std::time::Duration),
 
+    /// A background [`crate::task`] failed while start was still running, and
+    /// unwind did not surface a more specific join error.
+    #[error("background task failed during start")]
+    TaskFailedDuringStart,
+
     /// Failed to install a SIGINT listener.
     #[error("failed to listen for SIGINT: {0}")]
     SigintListen(#[source] std::io::Error),
@@ -139,7 +144,9 @@ pub enum Error {
     /// An application hook returned this failure.
     ///
     /// Prefer [`Error::hook`] rather than constructing this variant directly.
-    /// [`crate::Lifecycle`] fills in [`Self::Hook::name`] when the hook has one.
+    /// [`crate::Lifecycle`] fills in [`Self::Hook::name`] when the hook has one
+    /// and the failure is already this variant. [`Error::Io`] and other
+    /// variants are left unchanged.
     #[error("{}", hook_failed_message(.name, .source))]
     Hook {
         /// [`crate::Hook::name`] when known.
@@ -211,7 +218,7 @@ impl Error {
     /// Accepts anything convertible to [`BoxError`], including `&str`, `String`,
     /// [`std::io::Error`], and types that implement [`std::error::Error`].
     /// [`crate::Lifecycle`] attaches [`Hook::name`](crate::Hook::name) when the
-    /// hook has one, so the returned [`Error::Hook`] display includes that label.
+    /// hook has one and the failure is already [`Error::Hook`].
     pub fn hook(err: impl Into<BoxError>) -> Self {
         Self::Hook {
             name: None,
@@ -219,7 +226,9 @@ impl Error {
         }
     }
 
-    /// Attach a hook name when the failure came from a named lifecycle hook.
+    /// Attach a hook name when the failure is already [`Error::Hook`].
+    /// Other variants (for example [`Error::Io`]) are left unchanged so
+    /// callers can still match on them.
     pub(crate) fn with_hook_name(self, name: Option<&'static str>) -> Self {
         match self {
             Self::Hook {
@@ -229,13 +238,7 @@ impl Error {
                 name: name.or(existing),
                 source,
             },
-            other => match name {
-                None => other,
-                Some(name) => Self::Hook {
-                    name: Some(name),
-                    source: Box::new(other),
-                },
-            },
+            other => other,
         }
     }
 
@@ -425,13 +428,13 @@ mod tests {
     }
 
     #[test]
-    fn with_hook_name_wraps_io() {
+    fn with_hook_name_leaves_io_unchanged() {
         let err = Error::io("bind", std::io::Error::other("addr in use"))
             .with_hook_name(Some("http.serve"));
-        let msg = err.to_string();
-        assert!(msg.contains("http.serve"), "unexpected: {msg}");
-        assert!(msg.contains("bind"), "unexpected: {msg}");
-        assert!(StdError::source(&err).is_some());
+        match err {
+            Error::Io { context, .. } => assert_eq!(context, "bind"),
+            other => panic!("expected Io, got {other}"),
+        }
     }
 
     #[test]

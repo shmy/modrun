@@ -1,10 +1,11 @@
 //! Background [`modrun::task`] lifecycle tests.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use modrun::{Error, Lifecycle, Modrun, task, task_with};
+use modrun::{Error, Lifecycle, Modrun, Shutdowner, hook, task, task_with};
 
 #[tokio::test]
 async fn task_runs_until_stop() {
@@ -131,6 +132,91 @@ async fn task_panic_unblocks_run() {
     assert!(msg.contains("worker"), "{msg}");
     assert!(
         msg.contains("panicked") || msg.contains("task-boom"),
+        "{msg}"
+    );
+}
+
+#[tokio::test]
+async fn task_success_does_not_request_shutdown() {
+    fn boot(
+        lc: Lifecycle,
+        shutdown: Shutdowner,
+        slot: Arc<Mutex<Option<Shutdowner>>>,
+    ) -> modrun::Result<()> {
+        *slot.lock().unwrap() = Some(shutdown.clone());
+        lc.append(task("quick", |_stopped| async { Ok(()) }))
+    }
+
+    let slot = Arc::new(Mutex::new(None::<Shutdowner>));
+    let app = Modrun::builder()
+        .no_banner()
+        .supply(Arc::clone(&slot))
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let requested = slot
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("shutdown captured")
+        .is_requested();
+    assert!(!requested, "Ok(()) must not shut the app down");
+    app.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn task_with_run_error_unblocks_run() {
+    fn boot(lc: Lifecycle) -> modrun::Result<()> {
+        lc.append(task_with(
+            "serve",
+            || async { Ok(()) },
+            |(), _stopped| async { Err(Error::hook("serve-boom")) },
+        ))
+    }
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(2),
+        Modrun::builder().no_banner().invoke(boot).run(),
+    )
+    .await
+    .expect("run should unblock after task_with run error")
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("serve-boom"), "{msg}");
+    assert!(msg.contains("serve"), "{msg}");
+}
+
+#[tokio::test]
+async fn task_failure_during_later_start_is_not_ok() {
+    fn boot(lc: Lifecycle) -> modrun::Result<()> {
+        lc.append(task("die", |_stopped| async { Err(Error::hook("died")) }))?;
+        lc.append(hook().on_start(|| async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(())
+        }))
+    }
+
+    let started = std::time::Instant::now();
+    let err = tokio::time::timeout(
+        Duration::from_secs(3),
+        Modrun::builder()
+            .no_banner()
+            .start_timeout(Duration::from_secs(5))
+            .invoke(boot)
+            .run(),
+    )
+    .await
+    .expect("run should unblock after task failure during start")
+    .unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "should not wait for the later start hook"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("died") || msg.contains("background task failed during start"),
         "{msg}"
     );
 }

@@ -200,12 +200,13 @@ Modrun::builder()
 
 `run()` 把构建或启动阶段的 Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 当成优雅退出：unwind 已经启动的 hook 以及已注册的 stop-only hook，清理成功则返回 `Ok(())`。
+后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 在 start 阶段失败或 panic **不算**优雅退出——`run()` 返回 join 错误（若 unwind 上报成功，则为 `background task failed during start`）。
 若该阶段已经失败，`run()` 仍返回那次失败。
 Shutdown 和 OS 信号与超时一样是协作式的：在下一个 `.await` 才生效，所以同步 OnStart 里调用 `shutdown()` 不会跳过后面尚未让出的 hook。进入 `RUNNING` 之后，`run()` 会等到信号或 `Shutdowner::shutdown()`；后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 失败或 panic 会自动请求 shutdown。用 `tokio::spawn` 自己拉起的任务仍须调用 `shutdown()`，否则会一直等。构造函数、invoker 或 hook 里的 panic 不会变成 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)，并可能跳过生命周期 unwind（tracing 记为 `panicked`）。
 
 ## 测试
 
-`start()` 构建并启动，不等待信号，返回一个你可以自己 `stop()` 的 `RunningApp`：
+`start()` 构建并启动，不等待信号，返回一个你可以自己 `stop()` 的 `RunningApp`。后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 在 OnStart 返回之后失败时，**不会**让 `start()` 失败，也不会跳过后续 hook；在 [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html) 上等待或调用 `stop()` 才能看到。需要失败 worker 拆掉整个进程时用 [`run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run)：
 
 ```rust
 # use std::sync::Arc;
@@ -288,6 +289,7 @@ hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默�
 * `application stop timed out after 15s while unwinding`
 * `invoker my::boot failed: …`
 * `hook 'http.serve' failed: …`
+* `background task failed during start`
 
 构造函数和 hook 失败会把原始错误留在
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source)。

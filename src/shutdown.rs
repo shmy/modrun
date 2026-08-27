@@ -28,6 +28,7 @@ pub struct Shutdowner {
 struct Inner {
     notify: Notify,
     requested: AtomicBool,
+    from_failure: AtomicBool,
 }
 
 impl Shutdowner {
@@ -36,6 +37,7 @@ impl Shutdowner {
             inner: Arc::new(Inner {
                 notify: Notify::new(),
                 requested: AtomicBool::new(false),
+                from_failure: AtomicBool::new(false),
             }),
         }
     }
@@ -48,6 +50,19 @@ impl Shutdowner {
     pub fn shutdown(&self) {
         self.inner.requested.store(true, Ordering::Release);
         self.inner.notify.notify_waiters();
+    }
+
+    /// Like [`shutdown`](Self::shutdown), but `run` treats a start-phase
+    /// interrupt as a failure rather than a graceful `Ok(())`.
+    pub(crate) fn fail(&self) {
+        self.inner.from_failure.store(true, Ordering::Release);
+        self.shutdown();
+    }
+
+    /// Whether a background [`crate::task`] requested shutdown after failing.
+    #[must_use]
+    pub(crate) fn is_failure(&self) -> bool {
+        self.inner.from_failure.load(Ordering::Acquire)
     }
 
     /// Whether [`shutdown`](Self::shutdown) has already been called.
@@ -76,6 +91,10 @@ impl std::fmt::Debug for Shutdowner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shutdowner")
             .field("requested", &self.inner.requested.load(Ordering::Acquire))
+            .field(
+                "from_failure",
+                &self.inner.from_failure.load(Ordering::Acquire),
+            )
             .finish()
     }
 }

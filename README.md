@@ -291,7 +291,10 @@ For production start that runs migrations or cache warm-up, set an explicit
 `run()` treats Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 during build or start as a graceful stop: it unwinds hooks that already started
 and any registered stop-only hooks, and returns `Ok(())` if cleanup succeeds.
-If that phase had already failed, `run()` still returns the failure.
+A background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) that
+fails or panics during start is **not** treated as graceful — `run()` returns
+the join error (or `background task failed during start` if unwind reported
+success). If that phase had already failed, `run()` still returns the failure.
 Shutdown and OS signals are cooperative in the same way as timeouts: they take
 effect at the next `.await`, so a `shutdown()` from a synchronous OnStart does
 not skip later hooks that have not yet yielded. After `RUNNING`, `run()` waits
@@ -305,7 +308,11 @@ and may skip lifecycle unwind (tracing records it as `panicked`).
 ## Testing
 
 `start()` builds and starts without waiting for a signal, returning a `RunningApp` you
-can `stop()` yourself:
+can `stop()` yourself. A background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html)
+that fails after its OnStart has returned does **not** fail `start()` or skip later
+hooks; wait on [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
+or call `stop()` to observe it. Use [`run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run)
+when a failed worker should tear the process down:
 
 ```rust
 # use std::sync::Arc;
@@ -392,6 +399,7 @@ Graph problems fail before constructors run. Typical `Display` text:
 * `application stop timed out after 15s while unwinding`
 * `invoker my::boot failed: …`
 * `hook 'http.serve' failed: …`
+* `background task failed during start`
 
 Constructor and hook failures keep the original error on
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source).

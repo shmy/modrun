@@ -79,14 +79,14 @@ impl LiveTask {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(err)) => {
                     if let Some(shutdown) = shutdown {
-                        shutdown.shutdown();
+                        shutdown.fail();
                     }
                     Err(err)
                 }
                 Err(err) if err.is_cancelled() => Ok(()),
                 Err(err) => {
                     if let Some(shutdown) = shutdown {
-                        shutdown.shutdown();
+                        shutdown.fail();
                     }
                     Err(Error::hook(TaskJoinError { name, source: err }))
                 }

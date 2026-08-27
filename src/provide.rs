@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use crate::app::BuildState;
-use crate::container::{ArcRegisterFn, ConstructOut, Container, pack, register_arc_resolver};
+use crate::container::{ConstructOut, Container, pack};
 use crate::deps::DepList;
 use crate::error::user_ctor_err;
 use crate::option::ModOption;
@@ -161,7 +161,6 @@ pub struct DynProvider {
     alias_types: [TypeId; 1],
     deps: DepList,
     construct_fn: ConstructFn,
-    register_arc: Option<ArcRegisterFn>,
 }
 
 impl std::fmt::Debug for DynProvider {
@@ -207,10 +206,6 @@ impl DynProvider {
     pub(crate) fn construct(&self, container: &Container) -> Result<ConstructOut> {
         (self.construct_fn)(container)
     }
-
-    pub(crate) fn register_arc(&self) -> Option<ArcRegisterFn> {
-        self.register_arc
-    }
 }
 
 fn dyn_for<T: Send + Sync + 'static>(deps: DepList, construct: ConstructFn) -> DynProvider {
@@ -220,7 +215,6 @@ fn dyn_for<T: Send + Sync + 'static>(deps: DepList, construct: ConstructFn) -> D
         alias_types: [TypeId::of::<Arc<T>>()],
         deps,
         construct_fn: construct,
-        register_arc: Some(register_arc_resolver::<T>),
     }
 }
 

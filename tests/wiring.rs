@@ -354,6 +354,59 @@ async fn inject_arc_without_cloning_t() {
 }
 
 #[tokio::test]
+async fn constructor_can_depend_on_arc_of_provider_result() {
+    struct Config;
+    struct Service(Arc<Config>);
+
+    fn new_config() -> Config {
+        Config
+    }
+    fn new_service(config: Arc<Config>) -> Service {
+        Service(config)
+    }
+    fn boot(service: Arc<Service>) {
+        let _ = &service.0;
+    }
+
+    Modrun::builder()
+        .provide(new_config)
+        .provide(new_service)
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cycle_through_arc_dependency_is_reported_during_validation() {
+    #[derive(Clone)]
+    struct A;
+    struct B;
+
+    fn new_a(_b: Arc<B>) -> A {
+        A
+    }
+    fn new_b(_a: A) -> B {
+        B
+    }
+
+    let err = Modrun::builder()
+        .provide(new_a)
+        .provide(new_b)
+        .start()
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cycle") && msg.contains("->"),
+        "unexpected: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn provide_mut_and_invoke_async() {
     struct N(u8);
 

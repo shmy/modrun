@@ -490,6 +490,46 @@ async fn shutdown_during_start_unwinds_gracefully() {
 }
 
 #[tokio::test]
+async fn shutdown_during_start_runs_stop_only_after_unstarted_hook() {
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
+
+    fn boot(lc: Lifecycle, log: Log, shutdown: Shutdowner) {
+        let s = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            s.shutdown();
+        });
+
+        lc.append(hook().on_start(|| async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            Ok(())
+        }))
+        .unwrap();
+        lc.append(hook().on_start(|| async {
+            panic!("later start hook must not run after shutdown");
+        }))
+        .unwrap();
+
+        let stopped = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(stopped, |stopped| {
+            stopped.lock().unwrap().push("stop-only");
+            Ok(())
+        })))
+        .unwrap();
+    }
+
+    let log = Log(Arc::new(Mutex::new(Vec::new())));
+    Modrun::builder()
+        .supply(log.clone())
+        .invoke(boot)
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(log.0.lock().unwrap().as_slice(), ["stop-only"]);
+}
+
+#[tokio::test]
 async fn shutdown_during_build_is_ok() {
     #[derive(Clone)]
     struct Pool;

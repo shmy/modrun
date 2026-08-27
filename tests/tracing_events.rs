@@ -97,6 +97,81 @@ async fn emits_fx_style_lifecycle_events() {
     assert!(logs.contains("modrun"), "{logs}");
 }
 
+#[tokio::test]
+async fn sync_constructor_tracing_wraps_execution_and_reports_errors() {
+    #[derive(Clone)]
+    struct Service;
+
+    fn fail_service() -> modrun::Result<Service> {
+        Err(modrun::Error::hook("ctor-boom"))
+    }
+
+    let logs = with_logs(|| async {
+        Modrun::builder()
+            .provide_result(fail_service)
+            .invoke(|_: Service| {})
+            .start()
+            .await
+            .unwrap_err();
+    })
+    .await;
+
+    let before = logs.find("before run").expect("before run event");
+    let failed = logs
+        .find("error returned")
+        .expect("constructor error event");
+    assert!(before < failed, "{logs}");
+    assert!(logs.contains("ctor-boom"), "{logs}");
+}
+
+#[tokio::test]
+async fn build_timeout_emits_invoke_cancelled() {
+    async fn hang() {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+
+    let logs = with_logs(|| async {
+        Modrun::builder()
+            .build_timeout(Duration::from_millis(20))
+            .invoke_async(hang)
+            .start()
+            .await
+            .unwrap_err();
+    })
+    .await;
+
+    assert!(has_message(&logs, "invoke cancelled"), "{logs}");
+}
+
+#[tokio::test]
+async fn build_timeout_emits_constructor_cancelled() {
+    #[derive(Clone)]
+    struct Pool;
+
+    async fn hang() -> Pool {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Pool
+    }
+
+    let logs = with_logs(|| async {
+        Modrun::builder()
+            .build_timeout(Duration::from_millis(20))
+            .provide_async(hang)
+            .invoke(|_: Pool| {})
+            .start()
+            .await
+            .unwrap_err();
+    })
+    .await;
+
+    let before = logs.find("before run").expect("before run event");
+    let cancelled = logs
+        .find("run cancelled")
+        .expect("constructor cancel event");
+    assert!(before < cancelled, "{logs}");
+    assert!(has_message(&logs, "invoke cancelled"), "{logs}");
+}
+
 fn has_message(logs: &str, message: &str) -> bool {
     logs.lines().any(|line| line.contains(message))
 }
@@ -229,6 +304,29 @@ async fn build_cancel_emits_shutdown_requested() {
     .await;
 
     assert!(has_message(&logs, "shutdown requested"), "{logs}");
+}
+
+#[tokio::test]
+async fn steady_shutdown_emits_one_requested_event_without_signal() {
+    fn boot(lc: Lifecycle, shutdown: Shutdowner) {
+        lc.append(hook().on_start(move || async move {
+            shutdown.shutdown();
+            Ok(())
+        }))
+        .unwrap();
+    }
+
+    let logs = with_logs(|| async {
+        Modrun::builder().invoke(boot).run().await.unwrap();
+    })
+    .await;
+
+    let requested = logs
+        .lines()
+        .filter(|line| line.contains("shutdown requested"))
+        .count();
+    assert_eq!(requested, 1, "{logs}");
+    assert!(!has_message(&logs, "received signal"), "{logs}");
 }
 
 #[tokio::test]

@@ -112,6 +112,28 @@ pub(crate) fn invoke_failed(
     );
 }
 
+pub(crate) fn invoke_cancelled(function: &str, scope_name: &'static str) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    with_module(
+        module_label(scope_name),
+        || tracing::error!(target: TARGET, function, "invoke cancelled"),
+        |module| tracing::error!(target: TARGET, function, module, "invoke cancelled"),
+    );
+}
+
+pub(crate) fn invoke_panicked(function: &str, scope_name: &'static str) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    with_module(
+        module_label(scope_name),
+        || tracing::error!(target: TARGET, function, "invoke panicked"),
+        |module| tracing::error!(target: TARGET, function, module, "invoke panicked"),
+    );
+}
+
 fn log_type_event(type_name: &str, scope_name: &'static str, private: bool, event: &'static str) {
     with_module(
         module_label(scope_name),

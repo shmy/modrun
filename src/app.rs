@@ -66,6 +66,9 @@ impl std::fmt::Debug for ModrunBuilder {
         f.debug_struct("ModrunBuilder")
             .field("options", &self.options.len())
             .field("banner", &self.banner)
+            .field("build_timeout", &self.build_timeout)
+            .field("start_timeout", &self.start_timeout)
+            .field("stop_timeout", &self.stop_timeout)
             .finish()
     }
 }
@@ -315,6 +318,7 @@ impl ModrunBuilder {
             signal = signals.recv() => {
                 crate::trace::received_signal(signal);
                 shutdown.shutdown();
+                crate::trace::shutdown_requested();
             }
         }
         app.stop().await
@@ -381,6 +385,7 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
             let deps = invoker.dep_list();
             let module = state.container.scopes().name(scope);
             crate::trace::invoking(function, deps.as_slice(), module);
+            let mut invoke_guard = InflightInvoke::new(function, module);
             let previous = state.container.enter_scope(scope);
             let result = async {
                 if !deps.as_slice().is_empty() {
@@ -393,6 +398,7 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
             }
             .await;
             state.container.leave_scope(previous);
+            invoke_guard.finish();
             if let Err(ref err) = result {
                 crate::trace::invoke_failed(function, deps.as_slice(), module, err);
             }
@@ -406,6 +412,38 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
         Error::BuildTimeout(budget.unwrap_or(Duration::ZERO)),
     )
     .await
+}
+
+struct InflightInvoke {
+    function: &'static str,
+    module: &'static str,
+    finished: bool,
+}
+
+impl InflightInvoke {
+    fn new(function: &'static str, module: &'static str) -> Self {
+        Self {
+            function,
+            module,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) {
+        self.finished = true;
+    }
+}
+
+impl Drop for InflightInvoke {
+    fn drop(&mut self) {
+        if !self.finished {
+            if std::thread::panicking() {
+                crate::trace::invoke_panicked(self.function, self.module);
+            } else {
+                crate::trace::invoke_cancelled(self.function, self.module);
+            }
+        }
+    }
 }
 
 fn built_app_from_state(state: BuildState) -> BuiltApp {
@@ -483,7 +521,7 @@ struct BuiltApp {
 }
 
 async fn graceful_unwind(app: &BuiltApp) -> Result<()> {
-    unwind_lifecycle(&app.lifecycle, app.stop_timeout, false).await
+    unwind_lifecycle(&app.lifecycle, app.stop_timeout, true).await
 }
 
 async fn with_timeout(
@@ -519,7 +557,7 @@ impl BuiltApp {
             }
             Err(err) => {
                 crate::trace::rolling_back(&err);
-                let unwound = unwind_lifecycle(&self.lifecycle, self.stop_timeout, false).await;
+                let unwound = graceful_unwind(self).await;
                 crate::trace::start_failed(&err);
                 combine_results(Err(err), unwound)
             }

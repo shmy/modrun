@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::provide::DynProvider;
 use crate::scope::ScopeId;
 
-use super::types::{ProviderKey, TypeIdSet};
+use super::types::{ProviderKey, TypeIdMap, TypeIdSet};
 use super::{Container, DynAny};
 
 impl Container {
@@ -88,29 +88,6 @@ impl Container {
         Ok(())
     }
 
-    pub(crate) fn ready_wave(&self, pending: &TypeIdSet<ProviderKey>) -> Vec<ProviderKey> {
-        let mut ready: Vec<_> = pending
-            .iter()
-            .copied()
-            .filter(|&key| {
-                let Some(provider) = self.provider_at(key) else {
-                    return false;
-                };
-                provider.dep_types().iter().all(|&(dep_id, _)| {
-                    if self.value_satisfies(dep_id, key.scope) {
-                        return true;
-                    }
-                    match self.resolve_provider(dep_id, key.scope) {
-                        Some((dep_key, _)) => !pending.contains(&dep_key),
-                        None => false,
-                    }
-                })
-            })
-            .collect();
-        ready.sort_by_key(|k| self.order_index(*k));
-        ready
-    }
-
     pub(crate) fn validate(
         &mut self,
         invoker_deps: &[(ScopeId, &[(TypeId, &'static str)])],
@@ -148,22 +125,61 @@ impl Container {
     }
 
     fn freeze_layers(&mut self) -> Result<()> {
-        let mut pending: TypeIdSet<ProviderKey> = self.provider_order.iter().copied().collect();
-        let mut layers = Vec::new();
-        while !pending.is_empty() {
-            let ready = self.ready_wave(&pending);
-            if ready.is_empty() {
-                let name = pending
-                    .iter()
-                    .next()
-                    .map(|k| self.key_name(*k))
-                    .unwrap_or("<unknown>");
-                return Err(Error::Cycle(name.to_owned()));
+        let mut indegree = TypeIdMap::default();
+        let mut dependents: TypeIdMap<ProviderKey, Vec<ProviderKey>> = TypeIdMap::default();
+        for &key in &self.provider_order {
+            let Some(provider) = self.provider_at(key) else {
+                continue;
+            };
+            let mut degree = 0usize;
+            for &(dep_id, _) in provider.dep_types() {
+                if self.value_satisfies(dep_id, key.scope) {
+                    continue;
+                }
+                if let Some((dep_key, _)) = self.resolve_provider(dep_id, key.scope) {
+                    degree += 1;
+                    dependents.entry(dep_key).or_default().push(key);
+                }
             }
+            indegree.insert(key, degree);
+        }
+
+        let mut ready: Vec<_> = self
+            .provider_order
+            .iter()
+            .copied()
+            .filter(|key| indegree.get(key) == Some(&0))
+            .collect();
+        ready.sort_by_key(|key| self.order_index(*key));
+        let mut layers = Vec::new();
+        let mut built = 0usize;
+        while !ready.is_empty() {
+            built += ready.len();
+            let mut next = Vec::new();
             for key in &ready {
-                pending.remove(key);
+                for dependent in dependents.get(key).into_iter().flatten() {
+                    let degree = indegree
+                        .get_mut(dependent)
+                        .expect("dependent missing indegree");
+                    *degree -= 1;
+                    if *degree == 0 {
+                        next.push(*dependent);
+                    }
+                }
             }
             layers.push(ready);
+            next.sort_by_key(|key| self.order_index(*key));
+            ready = next;
+        }
+
+        if built != self.provider_order.len() {
+            let key = self
+                .provider_order
+                .iter()
+                .copied()
+                .find(|key| indegree.get(key).is_some_and(|degree| *degree > 0))
+                .expect("unbuilt provider missing positive indegree");
+            return Err(self.cycle_error(key, &[]));
         }
         self.layers = layers;
         Ok(())
@@ -175,9 +191,7 @@ impl Container {
                 return true;
             }
         }
-        self.values_public.contains_key(&id)
-            || self.arc_resolvers.contains_key(&id)
-            || self.resolve_provider(id, from).is_some()
+        self.values_public.contains_key(&id) || self.resolve_provider(id, from).is_some()
     }
 
     fn value_satisfies(&self, id: TypeId, from: ScopeId) -> bool {
@@ -194,7 +208,7 @@ impl Container {
                 return false;
             }
         }
-        self.values_public.contains_key(&id) || self.arc_resolvers.contains_key(&id)
+        self.values_public.contains_key(&id)
     }
 
     fn detect_cycles(&self) -> Result<()> {

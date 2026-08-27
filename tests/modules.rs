@@ -1,5 +1,7 @@
 //! Module scoping and private-provider tests.
 
+use std::sync::Arc;
+
 use modrun::{Modrun, Module};
 
 #[tokio::test]
@@ -41,6 +43,36 @@ async fn domain_modules_with_private_deps() {
                 .provide_private(new_order_repo)
                 .provide(new_order_service)
                 .invoke(boot_order),
+        )
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn module_constructor_can_depend_on_arc_of_private_provider() {
+    struct Config;
+    struct Service(Arc<Config>);
+
+    fn new_config() -> Config {
+        Config
+    }
+    fn new_service(config: Arc<Config>) -> Service {
+        Service(config)
+    }
+    fn boot(service: Arc<Service>) {
+        let _ = &service.0;
+    }
+
+    Modrun::builder()
+        .module(
+            Module::new("domain")
+                .provide_private(new_config)
+                .provide(new_service)
+                .invoke(boot),
         )
         .start()
         .await

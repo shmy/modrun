@@ -10,9 +10,9 @@ mod graph;
 mod storage;
 mod types;
 
-pub(crate) use storage::{pack, register_arc_resolver, seed_builtins};
+pub(crate) use storage::{pack, seed_builtins};
 pub(crate) use types::ConstructOut;
-pub(crate) use types::{ArcRegisterFn, ProviderKey, TypeIdMap, TypeIdSet};
+pub(crate) use types::{ProviderKey, TypeIdMap, TypeIdSet};
 
 pub(crate) type DynAny = Arc<dyn Any + Send + Sync>;
 pub(crate) type ArcResolveFn = fn(&DynAny) -> Result<Box<dyn Any + Send + Sync>>;
@@ -95,9 +95,6 @@ impl Container {
             }
         }
         self.providers.insert(key, provider);
-        if let Some(register) = self.providers.get(&key).and_then(|p| p.register_arc()) {
-            register(&mut self.arc_resolvers);
-        }
         self.provider_order_index
             .insert(key, self.provider_order.len());
         self.provider_order.push(key);

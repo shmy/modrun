@@ -77,28 +77,37 @@ impl Container {
             keys: ready,
         };
 
-        let mut futs = Vec::new();
-        let mut readies = Vec::new();
+        let mut futs = Vec::with_capacity(guard.keys.len());
+        let mut readies = Vec::with_capacity(guard.keys.len());
         for &key in &guard.keys {
             let previous = guard.container.enter_scope(key.scope);
-            let timed = crate::trace::start_timer();
-            let (name, module, out) = {
+            let (name, module) = {
                 let container = &*guard.container;
                 let provider = container
                     .provider_at(key)
                     .expect("pending key missing provider");
-                let name = provider.result_name();
-                let module = container.scopes.name(key.scope);
-                let out = provider.construct(container);
-                (name, module, out)
+                (provider.result_name(), container.scopes.name(key.scope))
             };
+            crate::trace::before_run(name, module);
+            let timed = crate::trace::start_timer();
+            let out = guard
+                .container
+                .provider_at(key)
+                .expect("pending key missing provider")
+                .construct(guard.container);
             guard.container.leave_scope(previous);
-            match out? {
-                ConstructOut::Ready(built) => {
+            match out {
+                Err(err) => {
+                    crate::trace::run_err(name, module, &err);
+                    return Err(err);
+                }
+                Ok(ConstructOut::Ready(built)) => {
                     let elapsed = crate::trace::elapsed(timed);
                     readies.push((key, name, module, built, elapsed));
                 }
-                ConstructOut::Fut(fut) => futs.push((key, name, module, fut)),
+                Ok(ConstructOut::Fut(fut)) => {
+                    futs.push((key, TracedConstruct::new(name, module, fut, timed)));
+                }
             }
         }
 
@@ -123,26 +132,19 @@ impl Container {
 }
 
 async fn join_constructs(
-    futs: Vec<(ProviderKey, &'static str, &'static str, ConstructFuture)>,
+    futs: Vec<(ProviderKey, TracedConstruct)>,
 ) -> Result<Vec<(ProviderKey, Constructed)>> {
     match futs.len() {
         0 => Ok(Vec::new()),
         1 => {
-            let (key, name, module, fut) = futs.into_iter().next().expect("len checked");
-            Ok(vec![(key, run_construct(name, module, fut).await?)])
+            let (key, fut) = futs.into_iter().next().expect("len checked");
+            Ok(vec![(key, fut.await?)])
         }
-        _ => {
-            let items = futs
-                .into_iter()
-                .map(|(key, name, module, fut)| (key, TracedConstruct::new(name, module, fut)))
-                .collect();
-            try_join_all(items).await
-        }
+        _ => try_join_all(futs).await,
     }
 }
 
 fn finish_ready(name: &'static str, module: &'static str, elapsed: std::time::Duration) {
-    crate::trace::before_run(name, module);
     crate::trace::run_ok(name, module, elapsed);
 }
 
@@ -151,18 +153,21 @@ struct TracedConstruct {
     module: &'static str,
     fut: ConstructFuture,
     timed: Option<std::time::Instant>,
-    began: bool,
     finished: bool,
 }
 
 impl TracedConstruct {
-    fn new(name: &'static str, module: &'static str, fut: ConstructFuture) -> Self {
+    fn new(
+        name: &'static str,
+        module: &'static str,
+        fut: ConstructFuture,
+        timed: Option<std::time::Instant>,
+    ) -> Self {
         Self {
             name,
             module,
             fut,
-            timed: None,
-            began: false,
+            timed,
             finished: false,
         }
     }
@@ -176,11 +181,6 @@ impl std::future::Future for TracedConstruct {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
-        if !this.began {
-            this.began = true;
-            crate::trace::before_run(this.name, this.module);
-            this.timed = crate::trace::start_timer();
-        }
         match this.fut.as_mut().poll(cx) {
             std::task::Poll::Ready(Ok(built)) => {
                 this.finished = true;
@@ -199,16 +199,8 @@ impl std::future::Future for TracedConstruct {
 
 impl Drop for TracedConstruct {
     fn drop(&mut self) {
-        if self.began && !self.finished {
+        if !self.finished {
             crate::trace::run_cancelled(self.name, self.module);
         }
     }
-}
-
-async fn run_construct(
-    name: &'static str,
-    module: &'static str,
-    fut: ConstructFuture,
-) -> Result<Constructed> {
-    TracedConstruct::new(name, module, fut).await
 }

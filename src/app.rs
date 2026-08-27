@@ -382,7 +382,16 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
             let module = state.container.scopes().name(scope);
             crate::trace::invoking(function, deps.as_slice(), module);
             let previous = state.container.enter_scope(scope);
-            let result = invoker.call(&mut state.container).await;
+            let result = async {
+                if !deps.as_slice().is_empty() {
+                    state.container.ensure_built(deps.as_slice()).await?;
+                }
+                match invoker.call(&state.container) {
+                    crate::invoke::InvokeOut::Done(r) => r,
+                    crate::invoke::InvokeOut::Fut(fut) => fut.await,
+                }
+            }
+            .await;
             state.container.leave_scope(previous);
             if let Err(ref err) = result {
                 crate::trace::invoke_failed(function, deps.as_slice(), module, err);

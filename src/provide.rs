@@ -90,7 +90,7 @@ impl ModOption for ProvideOption {
         let private = self.private;
         let scope = app.current_scope;
         app.container
-            .insert_provider(Box::new(self.provider), scope, private)?;
+            .insert_provider(self.provider, scope, private)?;
         crate::trace::provided(type_name, app.container.scopes().name(scope), private);
         Ok(())
     }
@@ -160,7 +160,7 @@ pub struct DynProvider {
     result_name: &'static str,
     alias_types: [TypeId; 1],
     deps: DepList,
-    construct: ConstructFn,
+    construct_fn: ConstructFn,
 }
 
 impl std::fmt::Debug for DynProvider {
@@ -198,27 +198,13 @@ impl DynProvider {
     pub fn dep_types(&self) -> &[(TypeId, &'static str)] {
         self.deps.as_slice()
     }
-}
 
-impl crate::container::Provider for DynProvider {
-    fn result_type(&self) -> TypeId {
-        self.result_type
-    }
-
-    fn result_name(&self) -> &'static str {
-        self.result_name
-    }
-
-    fn alias_types(&self) -> &[TypeId] {
+    pub(crate) fn alias_types(&self) -> &[TypeId] {
         &self.alias_types
     }
 
-    fn dep_types(&self) -> &[(TypeId, &'static str)] {
-        self.deps.as_slice()
-    }
-
-    fn construct(&self, container: &Container) -> Result<ConstructOut> {
-        (self.construct)(container)
+    pub(crate) fn construct(&self, container: &Container) -> Result<ConstructOut> {
+        (self.construct_fn)(container)
     }
 }
 
@@ -228,7 +214,7 @@ fn dyn_for<T: Send + Sync + 'static>(deps: DepList, construct: ConstructFn) -> D
         result_name: type_name::<T>(),
         alias_types: [TypeId::of::<Arc<T>>()],
         deps,
-        construct,
+        construct_fn: construct,
     }
 }
 

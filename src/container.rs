@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 
 use crate::future::{BoxFuture, try_join_all};
 use crate::lifecycle::Lifecycle;
+use crate::provide::DynProvider;
 use crate::scope::{ScopeId, ScopeTree};
 use crate::shutdown::Shutdowner;
 
@@ -91,19 +92,11 @@ pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
 /// so independent constructors in the same DAG layer can run concurrently.
 pub(crate) type ConstructFuture = BoxFuture<'static, Result<Constructed>>;
 
-/// Sync constructors finish inside [`Provider::construct`]; async ones return a
+/// Sync constructors finish inside [`DynProvider::construct`]; async ones return a
 /// future to be joined with the rest of the wave.
 pub(crate) enum ConstructOut {
     Ready(Constructed),
     Fut(ConstructFuture),
-}
-
-pub(crate) trait Provider: Send + Sync {
-    fn result_type(&self) -> TypeId;
-    fn result_name(&self) -> &'static str;
-    fn alias_types(&self) -> &[TypeId];
-    fn dep_types(&self) -> &[(TypeId, &'static str)];
-    fn construct(&self, container: &Container) -> Result<ConstructOut>;
 }
 
 /// Identifies one provider: type, registration scope, and visibility.
@@ -122,7 +115,7 @@ pub(crate) struct Container {
     scopes: ScopeTree,
     values_public: TypeIdMap<TypeId, DynAny>,
     values_private: TypeIdMap<(TypeId, ScopeId), DynAny>,
-    providers: TypeIdMap<ProviderKey, Box<dyn Provider>>,
+    providers: TypeIdMap<ProviderKey, DynProvider>,
     /// Public provider keys keyed by result type *and* `Arc<T>` aliases.
     public_index: TypeIdMap<TypeId, ProviderKey>,
     /// Private `Arc<T>` aliases → canonical private provider key.
@@ -206,7 +199,7 @@ impl Container {
 
     pub(crate) fn insert_provider(
         &mut self,
-        provider: Box<dyn Provider>,
+        provider: DynProvider,
         scope: ScopeId,
         private: bool,
     ) -> Result<()> {
@@ -288,7 +281,7 @@ impl Container {
     /// Ensure every root type (and its transitive unbuilt providers) is constructed.
     ///
     /// **Async** constructors in the same DAG layer are polled concurrently on this
-    /// task. **Sync** constructors run inside [`Provider::construct`](Provider::construct)
+    /// task. **Sync** constructors run inside [`DynProvider::construct`]
     /// while the wave is being assembled, which defers creation of later futures
     /// in the same layer.
     pub(crate) async fn ensure_built(&mut self, roots: &[(TypeId, &'static str)]) -> Result<()> {
@@ -349,11 +342,7 @@ impl Container {
         let mut readies = Vec::new();
         for &key in &guard.keys {
             let previous = guard.container.enter_scope(key.scope);
-            let timed = tracing::enabled!(
-                target: crate::trace::TARGET,
-                tracing::Level::INFO
-            )
-            .then(std::time::Instant::now);
+            let timed = crate::trace::start_timer();
             let (name, module, out) = {
                 let container = &*guard.container;
                 let provider = container
@@ -367,7 +356,7 @@ impl Container {
             guard.container.leave_scope(previous);
             match out? {
                 ConstructOut::Ready(built) => {
-                    let elapsed = timed.map(|t| t.elapsed()).unwrap_or_default();
+                    let elapsed = crate::trace::elapsed(timed);
                     readies.push((key, name, module, built, elapsed));
                 }
                 ConstructOut::Fut(fut) => futs.push((key, name, module, fut)),
@@ -427,7 +416,7 @@ impl Container {
 
     /// Resolve a type to the provider that would build it when seen from `from`:
     /// the nearest private provider up the scope chain, else the public one.
-    fn resolve_provider(&self, id: TypeId, from: ScopeId) -> Option<(ProviderKey, &dyn Provider)> {
+    fn resolve_provider(&self, id: TypeId, from: ScopeId) -> Option<(ProviderKey, &DynProvider)> {
         for scope in self.scopes.ancestors_from(from) {
             let key = ProviderKey {
                 type_id: id,
@@ -435,19 +424,19 @@ impl Container {
                 private: true,
             };
             if let Some(p) = self.providers.get(&key) {
-                return Some((key, p.as_ref()));
+                return Some((key, p));
             }
             if let Some(&canon) = self.private_alias.get(&(id, scope)) {
-                return self.providers.get(&canon).map(|p| (canon, p.as_ref()));
+                return self.providers.get(&canon).map(|p| (canon, p));
             }
         }
 
         let key = *self.public_index.get(&id)?;
-        self.providers.get(&key).map(|p| (key, p.as_ref()))
+        self.providers.get(&key).map(|p| (key, p))
     }
 
-    fn provider_at(&self, key: ProviderKey) -> Option<&dyn Provider> {
-        self.providers.get(&key).map(|p| p.as_ref())
+    fn provider_at(&self, key: ProviderKey) -> Option<&DynProvider> {
+        self.providers.get(&key)
     }
 
     fn missing_provider(&self, name: &'static str, from: ScopeId) -> Error {
@@ -724,20 +713,12 @@ impl std::future::Future for TracedConstruct {
         if !this.began {
             this.began = true;
             crate::trace::before_run(this.name, this.module);
-            if tracing::enabled!(target: crate::trace::TARGET, tracing::Level::INFO) {
-                this.timed = Some(std::time::Instant::now());
-            }
+            this.timed = crate::trace::start_timer();
         }
         match this.fut.as_mut().poll(cx) {
             std::task::Poll::Ready(Ok(built)) => {
                 this.finished = true;
-                crate::trace::run_ok(
-                    this.name,
-                    this.module,
-                    this.timed
-                        .map(|t| t.elapsed())
-                        .unwrap_or(std::time::Duration::ZERO),
-                );
+                crate::trace::run_ok(this.name, this.module, crate::trace::elapsed(this.timed));
                 std::task::Poll::Ready(Ok(built))
             }
             std::task::Poll::Ready(Err(err)) => {
@@ -793,9 +774,9 @@ mod tests {
     #[test]
     fn public_index_rejects_duplicate() {
         let mut c = Container::new();
-        let p = Box::new((|| 1u32).into_provider());
+        let p = (|| 1u32).into_provider();
         c.insert_provider(p, ScopeId::ROOT, false).unwrap();
-        let p2 = Box::new((|| 2u32).into_provider());
+        let p2 = (|| 2u32).into_provider();
         let err = c.insert_provider(p2, ScopeId::ROOT, false).unwrap_err();
         assert!(format!("{err}").contains("already provided"));
     }

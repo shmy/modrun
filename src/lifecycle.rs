@@ -1,8 +1,6 @@
+use crate::error::{Error, Result};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
-
-use crate::error::{Error, Result};
 
 use crate::error::aggregate_errors;
 use crate::future::BoxFuture;
@@ -320,13 +318,17 @@ impl StopGuard {
     }
 
     async fn run(mut self) -> Result<()> {
-        let started_at = Instant::now();
+        let started_at = crate::trace::start_timer();
         let result = {
             let hook = self.hook.as_mut().expect("hook present");
             hook.on_stop().await
         };
         match &result {
-            Ok(()) => crate::trace::on_stop_executed(self.idx, self.name, started_at.elapsed()),
+            Ok(()) => crate::trace::on_stop_executed(
+                self.idx,
+                self.name,
+                crate::trace::elapsed(started_at),
+            ),
             Err(err) => crate::trace::on_stop_failed(self.idx, self.name, err),
         }
         self.finished = true;
@@ -486,10 +488,10 @@ impl Lifecycle {
             };
 
             let mut inflight = InflightHook::start(self.clone(), idx, name);
-            let started_at = Instant::now();
+            let started_at = crate::trace::start_timer();
             match hook.on_start().await {
                 Ok(()) => {
-                    inflight.ok(started_at.elapsed());
+                    inflight.ok(crate::trace::elapsed(started_at));
                     let mut state = self.state();
                     state.hooks[idx].inner = Some(hook);
                     state.started += 1;

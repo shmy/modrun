@@ -12,6 +12,11 @@ use crate::future::BoxFuture;
 use crate::option::ModOption;
 use crate::scope::ScopeId;
 
+pub(crate) enum InvokeOut {
+    Done(Result<()>),
+    Fut(BoxFuture<'static, Result<()>>),
+}
+
 pub(crate) fn invoke<M, F>(func: F) -> Box<dyn ModOption>
 where
     F: InvokeFn<M> + 'static,
@@ -27,8 +32,8 @@ pub(crate) trait Invoker: Send {
     fn name(&self) -> &'static str;
     fn dep_types(&self) -> &[(TypeId, &'static str)];
     fn dep_list(&self) -> DepList;
-    /// Consume the invoker and run it once.
-    fn call<'a>(self: Box<Self>, container: &'a mut Container) -> BoxFuture<'a, Result<()>>;
+    /// Run after dependencies have been built. Sync invokers return [`InvokeOut::Done`].
+    fn call(self: Box<Self>, container: &Container) -> InvokeOut;
 }
 
 /// Invoker bound to the module scope where it was registered.
@@ -101,7 +106,7 @@ impl DynInvoker {
         self.inner.dep_list()
     }
 
-    pub(crate) fn call<'a>(self, container: &'a mut Container) -> BoxFuture<'a, Result<()>> {
+    pub(crate) fn call(self, container: &Container) -> InvokeOut {
         self.inner.call(container)
     }
 }
@@ -132,12 +137,9 @@ macro_rules! impl_invoke_zero {
                 DepList::empty()
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                _container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                Box::pin(async move {
+                InvokeOut::Done({
                     func();
                     Ok(())
                 })
@@ -167,12 +169,9 @@ macro_rules! impl_invoke_zero {
                 DepList::empty()
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                _container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                Box::pin(async move { func().map_err(user_invoke_err) })
+                InvokeOut::Done(func().map_err(user_invoke_err))
             }
         }
 
@@ -237,19 +236,14 @@ macro_rules! impl_invoke_fn {
                 self.deps
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = self.deps;
-                Box::pin(async move {
-                    container.ensure_built(deps.as_slice()).await?;
+                InvokeOut::Done((|| {
                     func(
                         $(container.get::<$A>()?,)+
                     );
                     Ok(())
-                })
+                })())
             }
         }
 
@@ -278,19 +272,14 @@ macro_rules! impl_invoke_fn {
                 self.deps
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = self.deps;
-                Box::pin(async move {
-                    container.ensure_built(deps.as_slice()).await?;
+                InvokeOut::Done((|| {
                     func(
                         $(container.get::<$A>()?,)+
                     )
                     .map_err(user_invoke_err)
-                })
+                })())
             }
         }
 
@@ -385,15 +374,12 @@ macro_rules! impl_async_invoke_zero {
                 DepList::empty()
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                _container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                Box::pin(async move {
+                InvokeOut::Fut(Box::pin(async move {
                     func().await;
                     Ok(())
-                })
+                }))
             }
         }
 
@@ -421,12 +407,11 @@ macro_rules! impl_async_invoke_zero {
                 DepList::empty()
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                _container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, _container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                Box::pin(async move { func().await.map_err(user_invoke_err) })
+                InvokeOut::Fut(Box::pin(
+                    async move { func().await.map_err(user_invoke_err) },
+                ))
             }
         }
 
@@ -494,20 +479,19 @@ macro_rules! impl_async_invoke_fn {
                 self.deps
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = self.deps;
-                Box::pin(async move {
-                    container.ensure_built(deps.as_slice()).await?;
-                    func(
+                match (|| {
+                    Ok::<_, crate::error::Error>(func(
                         $(container.get::<$A>()?,)+
-                    )
-                    .await;
-                    Ok(())
-                })
+                    ))
+                })() {
+                    Ok(future) => InvokeOut::Fut(Box::pin(async move {
+                        future.await;
+                        Ok(())
+                    })),
+                    Err(err) => InvokeOut::Done(Err(err)),
+                }
             }
         }
 
@@ -537,20 +521,18 @@ macro_rules! impl_async_invoke_fn {
                 self.deps
             }
 
-            fn call<'a>(
-                mut self: Box<Self>,
-                container: &'a mut Container,
-            ) -> BoxFuture<'a, Result<()>> {
+            fn call(mut self: Box<Self>, container: &Container) -> InvokeOut {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = self.deps;
-                Box::pin(async move {
-                    container.ensure_built(deps.as_slice()).await?;
-                    func(
+                match (|| {
+                    Ok::<_, crate::error::Error>(func(
                         $(container.get::<$A>()?,)+
-                    )
-                    .await
-                    .map_err(user_invoke_err)
-                })
+                    ))
+                })() {
+                    Ok(future) => InvokeOut::Fut(Box::pin(async move {
+                        future.await.map_err(user_invoke_err)
+                    })),
+                    Err(err) => InvokeOut::Done(Err(err)),
+                }
             }
         }
 

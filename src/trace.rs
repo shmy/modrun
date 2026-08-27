@@ -15,7 +15,17 @@ use crate::shutdown::Shutdowner;
 /// Log target for every modrun framework event.
 pub(crate) const TARGET: &str = "modrun";
 
-pub(crate) fn module_label(name: &'static str) -> Option<&'static str> {
+pub(crate) fn start_timer() -> Option<std::time::Instant> {
+    tracing::enabled!(target: TARGET, tracing::Level::INFO).then(std::time::Instant::now)
+}
+
+pub(crate) fn elapsed(started: Option<std::time::Instant>) -> std::time::Duration {
+    started
+        .map(|t| t.elapsed())
+        .unwrap_or(std::time::Duration::ZERO)
+}
+
+fn module_label(name: &'static str) -> Option<&'static str> {
     (name != "<root>").then_some(name)
 }
 

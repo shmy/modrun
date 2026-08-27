@@ -93,6 +93,7 @@ impl Container {
             };
             crate::trace::before_run(constructor, module);
             let timed = crate::trace::start_timer();
+            let mut call = ConstructCallGuard::new(constructor, module);
             let out = guard
                 .container
                 .provider_at(key)
@@ -101,14 +102,17 @@ impl Container {
             guard.container.leave_scope(previous);
             match out {
                 Err(err) => {
+                    call.finish();
                     crate::trace::run_err(constructor, module, &err);
                     return Err(err);
                 }
                 Ok(ConstructOut::Ready(built)) => {
+                    call.finish();
                     let elapsed = crate::trace::elapsed(timed);
                     readies.push((key, constructor, module, built, elapsed));
                 }
                 Ok(ConstructOut::Fut(fut)) => {
+                    call.finish();
                     futs.push((key, TracedConstruct::new(constructor, module, fut, timed)));
                 }
             }
@@ -149,6 +153,36 @@ async fn join_constructs(
 
 fn finish_ready(name: &'static str, module: &'static str, elapsed: std::time::Duration) {
     crate::trace::run_ok(name, module, elapsed);
+}
+
+struct ConstructCallGuard {
+    name: &'static str,
+    module: &'static str,
+    finished: bool,
+}
+
+impl ConstructCallGuard {
+    fn new(name: &'static str, module: &'static str) -> Self {
+        Self {
+            name,
+            module,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) {
+        self.finished = true;
+    }
+}
+
+impl Drop for ConstructCallGuard {
+    fn drop(&mut self) {
+        crate::trace::emit_unfinished(
+            self.finished,
+            || crate::trace::run_panicked(self.name, self.module),
+            || crate::trace::run_cancelled(self.name, self.module),
+        );
+    }
 }
 
 struct TracedConstruct {
@@ -202,8 +236,10 @@ impl std::future::Future for TracedConstruct {
 
 impl Drop for TracedConstruct {
     fn drop(&mut self) {
-        if !self.finished {
-            crate::trace::run_cancelled(self.name, self.module);
-        }
+        crate::trace::emit_unfinished(
+            self.finished,
+            || crate::trace::run_panicked(self.name, self.module),
+            || crate::trace::run_cancelled(self.name, self.module),
+        );
     }
 }

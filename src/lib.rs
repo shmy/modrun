@@ -132,7 +132,8 @@
 //! fields (`constructor`, `module`, `elapsed_ms`, …) for JSON subscribers.
 //! Call `modrun::logging::init()` from examples and local binaries
 //! (requires the `logging` feature); it is a no-op if a subscriber is already
-//! installed. Production processes should install their own subscriber and
+//! installed, and enables ANSI only when stderr is a terminal. Production
+//! processes should install their own subscriber and
 //! filter with `RUST_LOG=modrun=info`. Without a subscriber the events are
 //! cheap no-ops. Debug builds also print to stderr if a `RunningApp` is dropped
 //! without [`RunningApp::stop`].
@@ -148,7 +149,9 @@
 //! graph root, and start/stop via [`Lifecycle`]. There are no string qualifiers
 //! and no service locator after build. [`Hook`] methods will only grow with
 //! defaults. Constructors and invokers accept at most eight parameters; group
-//! extra deps in a struct. MSRV is **1.85** (edition 2024).
+//! extra deps in a struct. MSRV is **1.85** (edition 2024). Examples may need a
+//! newer compiler via their own dependencies (the MSRV job does not compile
+//! `--all-targets`).
 //!
 //! Application code should use [`ModrunBuilder::provide`] /
 //! [`ModrunBuilder::invoke`], not the [`ProviderFn`] marker types.

@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-use crate::error::{Error, Result};
-
 use crate::container::{Container, seed_builtins};
-use crate::error::combine_results;
+use crate::error::{Error, Result, combine_results, with_cleanup};
 use crate::invoke::ScopedInvoker;
 use crate::lifecycle::Lifecycle;
 use crate::module::Module;
@@ -106,6 +104,15 @@ impl ModrunBuilder {
     /// inside a sync invoker or constructor) cannot be preempted; after it
     /// returns, an over-budget success is still reported as
     /// [`Error::BuildTimeout`](crate::Error::BuildTimeout).
+    ///
+    /// [`Shutdowner`](crate::Shutdowner) and OS signals during [`run`](Self::run)
+    /// use the same cooperative rule: they cancel the current phase at its next
+    /// `.await`, so a shutdown from a synchronous OnStart does not skip later
+    /// hooks that have not yet yielded.
+    ///
+    /// The cancellation timer follows Tokio's clock; the over-budget `Ok` check
+    /// uses wall-clock [`std::time::Instant`]. Pausing Tokio time in tests
+    /// (`tokio::time::pause`) can make those two disagree.
     ///
     /// If set more than once, the last value wins. [`no_build_timeout`](Self::no_build_timeout)
     /// disables the budget.
@@ -260,10 +267,22 @@ impl ModrunBuilder {
     /// than a crash. A timeout or hook failure still returns an error — a
     /// concurrent shutdown does not turn that failure into `Ok(())`.
     ///
+    /// Cancellation is cooperative (same as [`build_timeout`](Self::build_timeout)):
+    /// the in-flight future is dropped at its next `.await`. After start
+    /// succeeds, this future waits until a signal or [`Shutdowner::shutdown`].
+    /// A background [`crate::task`] that fails on its own must call `shutdown()`
+    /// or `run` waits forever for an OS signal.
+    ///
     /// # Errors
     ///
     /// Returns an error when wiring/validation fails, a start or stop hook
     /// fails, a phase times out, or OS signal listeners cannot be installed.
+    ///
+    /// # Panics
+    ///
+    /// A panic in a constructor, invoker, or hook is a programming error and is
+    /// not converted into [`Error`]. Tracing records the in-flight phase as
+    /// `panicked`, but lifecycle unwind may not run.
     pub async fn run(self) -> Result<()> {
         self.print_banner();
         let lifecycle = Lifecycle::new();
@@ -354,6 +373,11 @@ impl ModrunBuilder {
     /// Returns an error when wiring/validation fails, graph construction times
     /// out, a start hook fails, or start times out (including cleanup failures
     /// while unwinding).
+    ///
+    /// # Panics
+    ///
+    /// Same as [`run`](Self::run): a panic in a constructor, invoker, or hook is
+    /// not converted into [`Error`] and may skip lifecycle unwind.
     pub async fn start(self) -> Result<RunningApp> {
         self.print_banner();
         let lifecycle = Lifecycle::new();
@@ -361,7 +385,10 @@ impl ModrunBuilder {
         let mut state = self.into_build_state(lifecycle.clone(), shutdown)?;
         let stop_timeout = state.stop_timeout;
         if let Err(e) = run_invokers(&mut state).await {
-            finish_run(Err(e), unwind_registered(&lifecycle, stop_timeout).await)?;
+            return Err(with_cleanup(
+                e,
+                unwind_registered(&lifecycle, stop_timeout).await,
+            ));
         }
         let app = built_app_from_state(state);
         app.start().await?;
@@ -456,13 +483,11 @@ impl InflightInvoke {
 
 impl Drop for InflightInvoke {
     fn drop(&mut self) {
-        if !self.finished {
-            if std::thread::panicking() {
-                crate::trace::invoke_panicked(self.function, self.module);
-            } else {
-                crate::trace::invoke_cancelled(self.function, self.module);
-            }
-        }
+        crate::trace::emit_unfinished(
+            self.finished,
+            || crate::trace::invoke_panicked(self.function, self.module),
+            || crate::trace::invoke_cancelled(self.function, self.module),
+        );
     }
 }
 
@@ -477,7 +502,7 @@ fn built_app_from_state(state: BuildState) -> BuiltApp {
 fn finish_run(phase: Result<()>, cleanup: Result<()>) -> Result<()> {
     match phase {
         Ok(()) => cleanup,
-        Err(e) => combine_results(Err(e), cleanup),
+        Err(e) => Err(with_cleanup(e, cleanup)),
     }
 }
 
@@ -498,14 +523,8 @@ fn report_unwind_result(lifecycle: &Lifecycle, result: Result<()>) -> Result<()>
     }
 }
 
-async fn unwind_lifecycle(
-    lifecycle: &Lifecycle,
-    stop_timeout: Option<Duration>,
-    prepare: bool,
-) -> Result<()> {
-    if prepare {
-        lifecycle.prepare_for_unwind();
-    }
+async fn unwind_lifecycle(lifecycle: &Lifecycle, stop_timeout: Option<Duration>) -> Result<()> {
+    lifecycle.prepare_for_unwind();
     report_unwind_result(
         lifecycle,
         with_timeout(
@@ -518,7 +537,7 @@ async fn unwind_lifecycle(
 }
 
 async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>) -> Result<()> {
-    unwind_lifecycle(lifecycle, stop_timeout, true).await
+    unwind_lifecycle(lifecycle, stop_timeout).await
 }
 
 impl_wiring_methods!(ModrunBuilder);
@@ -541,7 +560,7 @@ struct BuiltApp {
 }
 
 async fn graceful_unwind(app: &BuiltApp) -> Result<()> {
-    unwind_lifecycle(&app.lifecycle, app.stop_timeout, true).await
+    unwind_lifecycle(&app.lifecycle, app.stop_timeout).await
 }
 
 async fn with_timeout(

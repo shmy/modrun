@@ -144,7 +144,7 @@ async fn task_with_bind_conflict_fails_start() {
                 tokio::net::TcpListener::bind(addr)
                     .await
                     .map(|_| ())
-                    .map_err(Into::into)
+                    .map_err(|e| Error::io(format!("bind {addr}"), e))
             },
             |(), stopped| async move {
                 stopped.await;
@@ -162,6 +162,7 @@ async fn task_with_bind_conflict_fails_start() {
         .unwrap_err();
     let _ = held;
     let msg = err.to_string();
+    assert!(msg.contains("bind"), "{msg}");
     assert!(
         msg.contains("Address already in use")
             || msg.contains("addr in use")
@@ -210,4 +211,29 @@ async fn task_with_prepare_value_is_passed_to_run() {
         .unwrap();
 
     assert_eq!(hits.load(Ordering::SeqCst), 8);
+}
+
+#[tokio::test]
+async fn task_panic_error_includes_name() {
+    fn boot(lc: Lifecycle) -> modrun::Result<()> {
+        lc.append(task("worker", |_stopped| async {
+            panic!("task-boom");
+        }))
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("worker"), "{msg}");
+    assert!(
+        msg.contains("panicked") || msg.contains("task-boom"),
+        "{msg}"
+    );
 }

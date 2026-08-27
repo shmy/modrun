@@ -157,12 +157,9 @@ pub enum Error {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct MultipleStopError {
-    /// Number of failed hooks.
-    pub count: usize,
-    /// Semicolon-joined displays for easy logging.
-    pub summary: String,
-    /// Individual failures in stop order.
-    pub errors: Vec<Error>,
+    count: usize,
+    summary: String,
+    errors: Vec<Error>,
 }
 
 impl MultipleStopError {
@@ -209,6 +206,9 @@ impl Error {
     }
 
     /// Wrap an I/O failure with a short context label (e.g. `"bind 127.0.0.1:3000"`).
+    ///
+    /// There is no `From<std::io::Error>` impl, so `listener.bind().await?` does
+    /// not compile in a `modrun::Result` function — map with this helper instead.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {
             context: context.into(),
@@ -242,12 +242,6 @@ impl Error {
     }
 }
 
-impl From<std::io::Error> for Error {
-    fn from(source: std::io::Error) -> Self {
-        Self::io("io", source)
-    }
-}
-
 /// Wrap a user-facing fallible value with constructor/invoker context.
 pub(crate) fn user_ctor_err<T: ?Sized>(err: impl Into<BoxError>) -> Error {
     Error::constructor_failed::<T>(err)
@@ -269,13 +263,20 @@ pub(crate) fn aggregate_errors(errors: Vec<Error>) -> Result<()> {
 /// Prefer a cleanup failure as the primary error, while retaining the earlier
 /// phase error when both fail.
 pub(crate) fn combine_results(earlier: Result<()>, later: Result<()>) -> Result<()> {
-    match (earlier, later) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(e)) | (Err(e), Ok(())) => Err(e),
-        (Err(earlier), Err(later)) => Err(Error::CleanupAfterFailure {
-            cleanup: Box::new(later),
+    match earlier {
+        Ok(()) => later,
+        Err(e) => Err(with_cleanup(e, later)),
+    }
+}
+
+/// Keep a phase error; if cleanup also failed, wrap both.
+pub(crate) fn with_cleanup(earlier: Error, cleanup: Result<()>) -> Error {
+    match cleanup {
+        Ok(()) => earlier,
+        Err(cleanup) => Error::CleanupAfterFailure {
+            cleanup: Box::new(cleanup),
             earlier: Box::new(earlier),
-        }),
+        },
     }
 }
 
@@ -316,15 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn from_io_error() {
-        let err = Error::from(std::io::Error::other("nope"));
-        match &err {
-            Error::Io { context, .. } => assert_eq!(context, "io"),
-            other => panic!("expected Io, got {other}"),
-        }
-    }
-
-    #[test]
     fn cleanup_after_failure_source_is_cleanup() {
         let err = Error::CleanupAfterFailure {
             cleanup: Box::new(Error::hook("cleanup")),
@@ -332,6 +324,25 @@ mod tests {
         };
         let src = StdError::source(&err).expect("source");
         assert!(src.to_string().contains("cleanup"), "source was {src}");
+    }
+
+    #[test]
+    fn with_cleanup_ok_is_the_phase_error() {
+        let err = with_cleanup(Error::hook("earlier"), Ok(()));
+        assert!(err.to_string().contains("earlier"), "display was {err}");
+        assert!(!err.to_string().contains("cleanup failed"));
+    }
+
+    #[test]
+    fn with_cleanup_err_wraps_both() {
+        let err = with_cleanup(Error::hook("earlier"), Err(Error::hook("cleanup")));
+        match err {
+            Error::CleanupAfterFailure { cleanup, earlier } => {
+                assert!(cleanup.to_string().contains("cleanup"));
+                assert!(earlier.to_string().contains("earlier"));
+            }
+            other => panic!("expected CleanupAfterFailure, got {other}"),
+        }
     }
 
     #[test]

@@ -350,3 +350,116 @@ async fn stop_timeout_emits_hooks_abandoned() {
 
     assert!(has_message(&logs, "OnStop hooks abandoned"), "{logs}");
 }
+
+#[tokio::test]
+async fn constructor_panic_emits_panicked_not_cancelled() {
+    #[derive(Clone)]
+    struct Pool;
+
+    fn boom() -> Pool {
+        panic!("ctor-panic");
+    }
+
+    let logs = with_logs(|| async {
+        let handle = tokio::spawn(async {
+            let _ = Modrun::builder()
+                .provide(boom)
+                .invoke(|_: Pool| {})
+                .start()
+                .await;
+        });
+        assert!(handle.await.unwrap_err().is_panic());
+    })
+    .await;
+
+    assert!(has_message(&logs, " panicked"), "{logs}");
+    assert!(
+        !logs.lines().any(|line| line.contains(" cancelled")),
+        "{logs}"
+    );
+}
+
+#[tokio::test]
+async fn async_constructor_panic_emits_panicked_not_cancelled() {
+    #[derive(Clone)]
+    struct Pool;
+
+    async fn boom() -> Pool {
+        panic!("ctor-panic");
+    }
+
+    let logs = with_logs(|| async {
+        let handle = tokio::spawn(async {
+            let _ = Modrun::builder()
+                .provide_async(boom)
+                .invoke(|_: Pool| {})
+                .start()
+                .await;
+        });
+        assert!(handle.await.unwrap_err().is_panic());
+    })
+    .await;
+
+    assert!(has_message(&logs, " panicked"), "{logs}");
+    assert!(
+        !logs.lines().any(|line| line.contains(" cancelled")),
+        "{logs}"
+    );
+}
+
+#[tokio::test]
+async fn start_panic_emits_panicked_not_cancelled() {
+    fn boot(lc: Lifecycle) {
+        lc.append(
+            hook()
+                .name("boom")
+                .on_start(|| async { panic!("hook-panic") }),
+        )
+        .unwrap();
+    }
+
+    let logs = with_logs(|| async {
+        let handle = tokio::spawn(async {
+            let _ = Modrun::builder().invoke(boot).start().await;
+        });
+        assert!(handle.await.unwrap_err().is_panic());
+    })
+    .await;
+
+    assert!(has_message(&logs, "HOOK OnStart"), "{logs}");
+    assert!(logs.contains("boom"), "{logs}");
+    assert!(has_message(&logs, " panicked"), "{logs}");
+    assert!(
+        !logs.lines().any(|line| line.contains(" cancelled")),
+        "{logs}"
+    );
+}
+
+#[tokio::test]
+async fn stop_panic_emits_panicked_not_cancelled() {
+    fn boot(lc: Lifecycle) {
+        lc.append(
+            hook()
+                .name("boom")
+                .on_stop(|| async { panic!("hook-panic") }),
+        )
+        .unwrap();
+    }
+
+    let logs = with_logs(|| async {
+        let handle = tokio::spawn(async {
+            let app = Modrun::builder().invoke(boot).start().await.unwrap();
+            let _ = app.stop().await;
+        });
+        assert!(handle.await.unwrap_err().is_panic());
+    })
+    .await;
+
+    assert!(has_message(&logs, "HOOK OnStop"), "{logs}");
+    assert!(logs.contains("boom"), "{logs}");
+    assert!(has_message(&logs, " panicked"), "{logs}");
+    assert!(
+        !logs.lines().any(|line| line.contains(" cancelled")),
+        "{logs}"
+    );
+}

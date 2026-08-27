@@ -78,7 +78,10 @@ impl LiveTask {
         match joined {
             Ok(result) => result,
             Err(err) if err.is_cancelled() => Ok(()),
-            Err(err) => Err(Error::hook(err)),
+            Err(err) => Err(Error::hook(TaskJoinError {
+                name: self.name,
+                source: err,
+            })),
         }
     }
 }
@@ -91,6 +94,24 @@ impl Drop for LiveTask {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
+    }
+}
+
+#[derive(Debug)]
+struct TaskJoinError {
+    name: &'static str,
+    source: tokio::task::JoinError,
+}
+
+impl std::fmt::Display for TaskJoinError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "task '{}': {}", self.name, self.source)
+    }
+}
+
+impl std::error::Error for TaskJoinError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
     }
 }
 

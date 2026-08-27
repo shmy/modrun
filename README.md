@@ -116,9 +116,9 @@ inside the closure on each call. Hook and constructor
 errors use [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html) (`thiserror`); hooks should return
 [`Error::hook`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.hook) or
 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) so the original
-failure stays on [`std::error::Error::source`](std::error::Error::source). `std::io::Error` converts with
-[`From`](std::convert::From), so `listener.bind().await?` works inside a hook; prefer [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)
-when you want a context label.
+failure stays on [`std::error::Error::source`](std::error::Error::source). There is no
+[`From<std::io::Error>`](std::convert::From); wrap I/O with [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)
+(`bind(addr).await.map_err(|e| Error::io(format!("bind {addr}"), e))?`).
 
 Give hooks a [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
 for logs. Constructors and invokers accept at most eight parameters; group extra
@@ -134,11 +134,11 @@ join, and abort if the hook is dropped mid-flight. If background work fails
 after start has already succeeded, call
 [`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)
 so `run()` does not wait forever for a signal. Hook panics are treated as fatal
-programming errors and may bypass lifecycle unwind.
+programming errors and may bypass lifecycle unwind (logged as `panicked`).
 
 **`Shutdowner`** is also injected automatically. Calling `shutdown()` unblocks `run()`
 from inside the app, which is how you shut down in response to something other than a
-signal.
+signal. During build/start that cancellation is cooperative (next `.await`).
 
 The container is dropped when build finishes. Singletons stay alive only through
 values you capture in hooks (or other `Clone` handles taken during invoke). modrun
@@ -274,7 +274,9 @@ bound graph construction, OnStart, and OnStop respectively. Timeouts are
 cooperative: work that yields at `.await` is cancelled when the budget expires.
 Synchronous blocking (for example `std::thread::sleep` in a sync invoker,
 constructor, or hook) cannot be preempted, but an over-budget success is still
-reported as a timeout error rather than `Ok`. If a timeout is set more than once
+reported as a timeout error rather than `Ok`. The cancellation timer follows
+Tokio's clock; the over-budget `Ok` check uses wall-clock `Instant`, so
+`tokio::time::pause` in tests can make those two disagree. If a timeout is set more than once
 on the builder, the last value wins. `no_build_timeout` / `no_start_timeout` /
 `no_stop_timeout` disable the budget. `no_start_timeout` only disables OnStart;
 `stop_timeout` still budgets unwind after a failed or cancelled start. When the
@@ -287,6 +289,13 @@ For production start that runs migrations or cache warm-up, set an explicit
 during build or start as a graceful stop: it unwinds hooks that already started
 and any registered stop-only hooks, and returns `Ok(())` if cleanup succeeds.
 If that phase had already failed, `run()` still returns the failure.
+Shutdown and OS signals are cooperative in the same way as timeouts: they take
+effect at the next `.await`, so a `shutdown()` from a synchronous OnStart does
+not skip later hooks that have not yet yielded. After `RUNNING`, `run()` waits
+until a signal or `Shutdowner::shutdown()`; a background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html)
+that fails must call `shutdown()` or `run()` waits forever. A panic in a
+constructor, invoker, or hook is not converted into [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)
+and may skip lifecycle unwind (tracing records it as `panicked`).
 
 ## Testing
 

@@ -2,7 +2,9 @@
 name = "modrun"
 version = "0.1.0"
 edition = "2024"
-# Keep aligned with CI MSRV job (edition 2024).
+# Keep aligned with CI MSRV job (edition 2024). CI tests the library with
+# `cargo test` (not `--all-targets`) so examples/benches may depend on crates
+# with a higher MSRV (e.g. axum).
 rust-version = "1.85"
 description = "Lightweight app wiring: provide/invoke/lifecycle for Tokio services"
 license = "MIT"

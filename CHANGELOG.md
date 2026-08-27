@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-* MSRV lowered from 1.88 to **1.85** (edition 2024 floor; let-chains are unused).
-* [`logging::init`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html) is a no-op when a tracing subscriber is already installed (it no longer panics).
-* [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html) is `#[non_exhaustive]` and exposes accessors alongside the existing public fields.
+* MSRV lowered from 1.88 to **1.85** (edition 2024 floor; let-chains are unused). CI checks the library with `cargo test` (not `--all-targets`) so examples/benches are not bound to that MSRV.
+* [`logging::init`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html) is a no-op when a tracing subscriber is already installed (it no longer panics). ANSI follows stderr (TTY only).
+* [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html) is `#[non_exhaustive]`; use accessors (`count()`, `summary()`, `errors()`).
+* `std::io::Error` no longer converts with `From`. Use [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) with a context label.
+* Panic during invoke / construct / OnStart / OnStop is traced as `panicked`, not `cancelled`.
+* Background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) join failures include the task name.

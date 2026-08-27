@@ -80,16 +80,16 @@ start 和 stop 共享状态（`&mut self`）时，在结构体上实现 [`Hook`]
 一次性闭包用 [`hook()`](https://docs.rs/modrun/latest/modrun/fn.hook.html)；捕获共享状态的 OnStop 回调必须可重复调用（`Fn`）——每次调用时在闭包里 clone 一份 [`Arc`](std::sync::Arc)。
 Hook 和构造函数错误使用 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)（`thiserror`）；hook 应返回
 [`Error::hook`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.hook) 或
-[`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)，这样原始失败会留在 [`std::error::Error::source`](std::error::Error::source) 上。`std::io::Error` 可以通过 [`From`](std::convert::From) 转换，所以 hook 里 `listener.bind().await?` 能用；需要上下文标签时优先 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)。
+[`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)，这样原始失败会留在 [`std::error::Error::source`](std::error::Error::source) 上。没有 `From<std::io::Error>`，I/O 要用 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) 包一层（`bind(addr).await.map_err(|e| Error::io(format!("bind {addr}"), e))?`）。
 
 给 hook 一个 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
 用于日志。构造函数和 invoker 最多八个参数；多出来的依赖收进一个结构体，不要把参数个数拉长。
 
 Hook 的 future 必须是 cancellation-safe 的。start/stop 超时会 drop 正在进行的 future，但 **不能** 取消 `tokio::spawn` 出去的脱离任务。Worker 用 [`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html)；bind/listen 必须在 OnStart 里完成时用 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html)（见 axum 示例）。两者都会在 OnStop 时打出 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html)、join，并在 hook 中途被 drop 时 abort。若后台工作在 start 已经成功之后失败，调用
 [`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)，
-否则 `run()` 会一直等信号。Hook 里 panic 视为致命的编程错误，可能跳过生命周期 unwind。
+否则 `run()` 会一直等信号。Hook 里 panic 视为致命的编程错误，可能跳过生命周期 unwind（日志为 `panicked`）。
 
-**`Shutdowner`** 同样自动注入。在应用内部调用 `shutdown()` 会解开 `run()`，用来响应信号以外的停机原因。
+**`Shutdowner`** 同样自动注入。在应用内部调用 `shutdown()` 会解开 `run()`，用来响应信号以外的停机原因。构建/启动阶段的取消同样是协作式的（下一个 `.await`）。
 
 容器在 build 结束时被 drop。单例只通过你在 hook 里捕获的值（或 invoke 时拿走的其他 `Clone` 句柄）活下来。modrun 负责启动装配，不是活的 service locator。Build 不是事务：后面的 invoker 失败时，前面的构造函数可能已经产生了副作用。
 
@@ -195,12 +195,13 @@ Modrun::builder()
 * 同一类型提供了两次
 
 运行时，`build_timeout`、`start_timeout`、`stop_timeout`（默认 15s）分别限制图构建、OnStart、OnStop。超时是协作式的：在 `.await` 上让出的工作会在预算耗尽时被取消。
-同步阻塞（例如 sync invoker、构造函数或 hook 里的 `std::thread::sleep`）无法被抢占，但超时后的成功仍会报成超时错误而不是 `Ok`。同一项超时设多次，以最后一次为准。`no_build_timeout` / `no_start_timeout` / `no_stop_timeout` 关掉预算。`no_start_timeout` 只关掉 OnStart；失败或取消的 start 之后的 unwind 仍受 `stop_timeout` 限制。预算耗尽时，剩余 OnStop 会被放弃，并以错误上报而不是挂死——连接池可能来不及干净关闭。
+同步阻塞（例如 sync invoker、构造函数或 hook 里的 `std::thread::sleep`）无法被抢占，但超时后的成功仍会报成超时错误而不是 `Ok`。取消计时跟 Tokio 时钟；超时后的 `Ok` 检查用墙钟 `Instant`，测试里 `tokio::time::pause` 可能让两者不一致。同一项超时设多次，以最后一次为准。`no_build_timeout` / `no_start_timeout` / `no_stop_timeout` 关掉预算。`no_start_timeout` 只关掉 OnStart；失败或取消的 start 之后的 unwind 仍受 `stop_timeout` 限制。预算耗尽时，剩余 OnStop 会被放弃，并以错误上报而不是挂死——连接池可能来不及干净关闭。
 生产启动若要跑迁移或预热缓存，请显式设置 `start_timeout`（以及 `stop_timeout`），不要依赖默认的 15s。
 
 `run()` 把构建或启动阶段的 Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 当成优雅退出：unwind 已经启动的 hook 以及已注册的 stop-only hook，清理成功则返回 `Ok(())`。
 若该阶段已经失败，`run()` 仍返回那次失败。
+Shutdown 和 OS 信号与超时一样是协作式的：在下一个 `.await` 才生效，所以同步 OnStart 里调用 `shutdown()` 不会跳过后面尚未让出的 hook。进入 `RUNNING` 之后，`run()` 会等到信号或 `Shutdowner::shutdown()`；后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 自己失败时必须调用 `shutdown()`，否则会一直等。构造函数、invoker 或 hook 里的 panic 不会变成 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)，并可能跳过生命周期 unwind（tracing 记为 `panicked`）。
 
 ## 测试
 

@@ -118,6 +118,18 @@ pub(crate) fn invoke_panicked(function: &str, scope_name: &'static str) {
     );
 }
 
+/// Log panic vs cancel from a Drop that did not see a normal finish.
+pub(crate) fn emit_unfinished(finished: bool, panicked: impl FnOnce(), cancelled: impl FnOnce()) {
+    if finished {
+        return;
+    }
+    if std::thread::panicking() {
+        panicked();
+    } else {
+        cancelled();
+    }
+}
+
 pub(crate) fn provided(
     type_name: &str,
     constructor: &str,
@@ -208,6 +220,19 @@ pub(crate) fn run_cancelled(name: &str, scope_name: &'static str) {
     );
 }
 
+pub(crate) fn run_panicked(name: &str, scope_name: &'static str) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    let suffix = module_suffix(module_label(scope_name));
+    tracing::error!(
+        target: TARGET,
+        constructor = name,
+        module = scope_name,
+        "{PREFIX} ERROR\t\tprovide: {name} panicked{suffix}"
+    );
+}
+
 pub(crate) fn on_start_executing(hook: usize, name: Option<&str>) {
     if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
         return;
@@ -262,6 +287,19 @@ pub(crate) fn on_start_cancelled(hook: usize, name: Option<&str>) {
     );
 }
 
+pub(crate) fn on_start_panicked(hook: usize, name: Option<&str>) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    let label = hook_label(name, hook);
+    tracing::error!(
+        target: TARGET,
+        hook,
+        hook_name = label.as_str(),
+        "{PREFIX} HOOK OnStart\t\t{label} panicked"
+    );
+}
+
 pub(crate) fn on_stop_executing(hook: usize, name: Option<&str>) {
     if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
         return;
@@ -313,6 +351,19 @@ pub(crate) fn on_stop_cancelled(hook: usize, name: Option<&str>) {
         hook,
         hook_name = label.as_str(),
         "{PREFIX} HOOK OnStop\t\t{label} cancelled"
+    );
+}
+
+pub(crate) fn on_stop_panicked(hook: usize, name: Option<&str>) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
+    let label = hook_label(name, hook);
+    tracing::error!(
+        target: TARGET,
+        hook,
+        hook_name = label.as_str(),
+        "{PREFIX} HOOK OnStop\t\t{label} panicked"
     );
 }
 

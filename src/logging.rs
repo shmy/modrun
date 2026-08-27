@@ -9,6 +9,7 @@
 //! ```
 
 use std::fmt;
+use std::io::IsTerminal;
 
 use tracing::Event;
 use tracing::field::{Field, Visit};
@@ -25,6 +26,8 @@ use tracing_subscriber::registry::LookupSpan;
 /// the call is a **no-op** (it does not panic). Prefer [`try_init`] when you
 /// need to know whether this helper won. Production processes should set up
 /// their own subscriber and skip this function.
+///
+/// ANSI colors are enabled only when stderr is a terminal.
 pub fn init() {
     let _ = try_init();
 }
@@ -41,6 +44,7 @@ pub fn try_init() -> bool {
 /// Install a minimal tracing subscriber with an explicit filter.
 ///
 /// No-op when a subscriber is already installed. See [`init`].
+/// ANSI colors are enabled only when stderr is a terminal.
 pub fn init_with_filter(filter: EnvFilter) {
     let _ = try_init_with_filter(filter);
 }
@@ -51,7 +55,7 @@ pub fn init_with_filter(filter: EnvFilter) {
 pub fn try_init_with_filter(filter: EnvFilter) -> bool {
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_ansi(true)
+        .with_ansi(std::io::stderr().is_terminal())
         .event_format(MessageOnly)
         .try_init()
         .is_ok()

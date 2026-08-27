@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
-use modrun::{Lifecycle, Modrun, Module, Shutdowner, task_with};
+use modrun::{Error, Lifecycle, Modrun, Module, Shutdowner, task_with};
 
 #[derive(Clone)]
 struct Config {
@@ -61,7 +61,9 @@ fn register_http(
     lc.append(task_with(
         "http.serve",
         move || async move {
-            let listener = tokio::net::TcpListener::bind(addr).await?;
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|e| Error::io(format!("bind {addr}"), e))?;
             println!("listening on http://{addr}");
             Ok(listener)
         },
@@ -78,7 +80,7 @@ fn register_http(
                 // instead of waiting forever for an external signal.
                 shutdown.shutdown();
             }
-            result.map_err(Into::into)
+            result.map_err(|e| Error::io(format!("serve {addr}"), e))
         },
     ))
 }

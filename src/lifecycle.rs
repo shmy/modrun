@@ -59,7 +59,8 @@ type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync
 /// future. Any task spawned by a hook must be tracked and shut down explicitly
 /// — [`crate::task`] does this for you. Panicking is considered a fatal
 /// programming error and is not converted into [`Error`]; in particular, a
-/// panic during start may bypass lifecycle unwind.
+/// panic during start may bypass lifecycle unwind. Tracing records the
+/// in-flight phase as `panicked` rather than `cancelled`.
 ///
 /// # Stop-only struct hooks
 ///
@@ -288,8 +289,12 @@ impl InflightHook {
 
 impl Drop for InflightHook {
     fn drop(&mut self) {
+        crate::trace::emit_unfinished(
+            self.finished,
+            || crate::trace::on_start_panicked(self.idx, self.name),
+            || crate::trace::on_start_cancelled(self.idx, self.name),
+        );
         if !self.finished {
-            crate::trace::on_start_cancelled(self.idx, self.name);
             if let Some(lc) = self.lifecycle.take() {
                 lc.reject_append_and_activate_trailing();
             }
@@ -352,7 +357,11 @@ impl Drop for StopGuard {
                 state.hooks[self.idx].inner = Some(hook);
                 state.started += 1;
             }
-            crate::trace::on_stop_cancelled(self.idx, self.name);
+            crate::trace::emit_unfinished(
+                false,
+                || crate::trace::on_stop_panicked(self.idx, self.name),
+                || crate::trace::on_stop_cancelled(self.idx, self.name),
+            );
         }
     }
 }
@@ -514,9 +523,8 @@ impl Lifecycle {
     }
 
     /// Mark every remaining stop-only hook as started and drop hooks that never
-    /// ran OnStart, so a build cancel/failure can unwind stop-only hooks even
-    /// when they sit after a start hook. Start-failure still uses consecutive
-    /// trailing activation from the failed slot.
+    /// ran OnStart, so a build/start cancel or failure can unwind stop-only
+    /// hooks even when they sit after a start hook that did not run.
     pub(crate) fn prepare_for_unwind(&self) {
         let mut state = self.state();
         state.phase = Phase::Stopping;

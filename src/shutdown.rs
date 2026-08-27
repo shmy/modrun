@@ -10,6 +10,14 @@ use tokio::sync::Notify;
 /// When using [`ModrunBuilder::start`](crate::ModrunBuilder::start), call
 /// [`wait`](Self::wait) (or poll [`is_requested`](Self::is_requested)) from
 /// your own event loop.
+///
+/// During build or OnStart, cancellation is cooperative: the current future is
+/// dropped at its next `.await`. A call from a synchronous OnStart does not skip
+/// later hooks that have not yet yielded.
+///
+/// After the app is running, a background [`crate::task`] that can fail on its
+/// own should call [`shutdown`](Self::shutdown); otherwise `run()` waits forever
+/// for an OS signal.
 #[derive(Clone)]
 pub struct Shutdowner {
     inner: Arc<Inner>,
@@ -31,6 +39,10 @@ impl Shutdowner {
     }
 
     /// Request a graceful shutdown.
+    ///
+    /// See the [type-level docs](Self) for cooperative cancellation and for
+    /// unblocking [`ModrunBuilder::run`](crate::ModrunBuilder::run) after a
+    /// background task fails.
     pub fn shutdown(&self) {
         self.inner.requested.store(true, Ordering::Release);
         self.inner.notify.notify_waiters();

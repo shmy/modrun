@@ -81,14 +81,17 @@ impl Container {
         let mut readies = Vec::with_capacity(guard.keys.len());
         for &key in &guard.keys {
             let previous = guard.container.enter_scope(key.scope);
-            let (name, module) = {
+            let (constructor, module) = {
                 let container = &*guard.container;
                 let provider = container
                     .provider_at(key)
                     .expect("pending key missing provider");
-                (provider.result_name(), container.scopes.name(key.scope))
+                (
+                    provider.constructor_name(),
+                    container.scopes.name(key.scope),
+                )
             };
-            crate::trace::before_run(name, module);
+            crate::trace::before_run(constructor, module);
             let timed = crate::trace::start_timer();
             let out = guard
                 .container
@@ -98,15 +101,15 @@ impl Container {
             guard.container.leave_scope(previous);
             match out {
                 Err(err) => {
-                    crate::trace::run_err(name, module, &err);
+                    crate::trace::run_err(constructor, module, &err);
                     return Err(err);
                 }
                 Ok(ConstructOut::Ready(built)) => {
                     let elapsed = crate::trace::elapsed(timed);
-                    readies.push((key, name, module, built, elapsed));
+                    readies.push((key, constructor, module, built, elapsed));
                 }
                 Ok(ConstructOut::Fut(fut)) => {
-                    futs.push((key, TracedConstruct::new(name, module, fut, timed)));
+                    futs.push((key, TracedConstruct::new(constructor, module, fut, timed)));
                 }
             }
         }

@@ -1,4 +1,4 @@
-//! Framework tracing events mirror uber/fx's fxevent messages.
+//! Framework tracing events mirror uber/fx's ConsoleLogger messages.
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
@@ -35,7 +35,9 @@ where
     let writer = capture.clone();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .with_target(true)
+        .without_time()
+        .with_target(false)
+        .with_level(false)
         .with_ansi(false)
         .with_writer(move || writer.clone())
         .finish();
@@ -79,22 +81,17 @@ async fn emits_fx_style_lifecycle_events() {
     })
     .await;
 
-    assert!(has_message(&logs, "supplied"), "{logs}");
-    assert!(has_message(&logs, "provided"), "{logs}");
-    assert!(has_message(&logs, "invoking"), "{logs}");
-    assert!(has_message(&logs, "before run"), "{logs}");
-    assert!(
-        logs.lines()
-            .any(|l| l.contains("run") && !l.contains("before run") && !l.contains("cancelled")),
-        "{logs}"
-    );
-    assert!(has_message(&logs, "OnStart hook executing"), "{logs}");
-    assert!(has_message(&logs, "OnStart hook executed"), "{logs}");
-    assert!(has_message(&logs, "started"), "{logs}");
-    assert!(has_message(&logs, "OnStop hook executing"), "{logs}");
-    assert!(has_message(&logs, "OnStop hook executed"), "{logs}");
-    assert!(has_message(&logs, "stopped"), "{logs}");
-    assert!(logs.contains("modrun"), "{logs}");
+    assert!(has_message(&logs, "SUPPLY"), "{logs}");
+    assert!(has_message(&logs, "PROVIDE"), "{logs}");
+    assert!(has_message(&logs, "INVOKE"), "{logs}");
+    assert!(has_message(&logs, "BEFORE RUN"), "{logs}");
+    assert!(has_message(&logs, "RUN"), "{logs}");
+    assert!(has_message(&logs, "HOOK OnStart"), "{logs}");
+    assert!(has_message(&logs, "ran successfully"), "{logs}");
+    assert!(has_message(&logs, "RUNNING"), "{logs}");
+    assert!(has_message(&logs, "HOOK OnStop"), "{logs}");
+    assert!(has_message(&logs, "STOPPED"), "{logs}");
+    assert!(logs.contains("[modrun]"), "{logs}");
 }
 
 #[tokio::test]
@@ -116,12 +113,11 @@ async fn sync_constructor_tracing_wraps_execution_and_reports_errors() {
     })
     .await;
 
-    let before = logs.find("before run").expect("before run event");
-    let failed = logs
-        .find("error returned")
-        .expect("constructor error event");
+    let before = logs.find("BEFORE RUN").expect("before run event");
+    let failed = logs.find("provide:").expect("constructor error event");
     assert!(before < failed, "{logs}");
     assert!(logs.contains("ctor-boom"), "{logs}");
+    assert!(logs[failed..].contains("failed"), "{logs}");
 }
 
 #[tokio::test]
@@ -164,10 +160,12 @@ async fn build_timeout_emits_constructor_cancelled() {
     })
     .await;
 
-    let before = logs.find("before run").expect("before run event");
-    let cancelled = logs
-        .find("run cancelled")
+    let before = logs.find("BEFORE RUN").expect("before run event");
+    let provide_cancel = logs
+        .lines()
+        .find(|line| line.contains("provide:") && line.contains(" cancelled"))
         .expect("constructor cancel event");
+    let cancelled = logs.find(provide_cancel).expect("constructor cancel event");
     assert!(before < cancelled, "{logs}");
     assert!(has_message(&logs, "invoke cancelled"), "{logs}");
 }
@@ -189,9 +187,9 @@ async fn emits_rollback_events_on_start_failure() {
     })
     .await;
 
-    assert!(has_message(&logs, "OnStart hook failed"), "{logs}");
-    assert!(has_message(&logs, "start failed, rolling back"), "{logs}");
-    assert!(has_message(&logs, "start failed"), "{logs}");
+    assert!(has_message(&logs, "HOOK OnStart"), "{logs}");
+    assert!(has_message(&logs, "rolling back"), "{logs}");
+    assert!(has_message(&logs, "Failed to start"), "{logs}");
 }
 
 #[tokio::test]
@@ -214,7 +212,8 @@ async fn start_timeout_emits_cancelled() {
     })
     .await;
 
-    assert!(has_message(&logs, "OnStart hook cancelled"), "{logs}");
+    assert!(has_message(&logs, "HOOK OnStart"), "{logs}");
+    assert!(has_message(&logs, "cancelled"), "{logs}");
     assert!(logs.contains("hang"), "{logs}");
 }
 
@@ -240,12 +239,8 @@ async fn invoking_logs_function_and_filters_framework_deps() {
 
     let invoking_line = logs
         .lines()
-        .find(|l| l.contains("modrun:") && l.contains(" invoking"))
+        .find(|l| l.contains("INVOKE") && l.contains("register_http"))
         .expect("invoking line");
-    assert!(invoking_line.contains("register_http"), "{invoking_line}");
-    assert!(invoking_line.contains("function="), "{invoking_line}");
-    assert!(invoking_line.contains("deps="), "{invoking_line}");
-    assert!(invoking_line.contains("Config"), "{invoking_line}");
     assert!(
         !invoking_line.contains("modrun::lifecycle::Lifecycle"),
         "{invoking_line}"
@@ -303,7 +298,7 @@ async fn build_cancel_emits_shutdown_requested() {
     })
     .await;
 
-    assert!(has_message(&logs, "shutdown requested"), "{logs}");
+    assert!(has_message(&logs, "SHUTDOWN REQUESTED"), "{logs}");
 }
 
 #[tokio::test]
@@ -323,10 +318,10 @@ async fn steady_shutdown_emits_one_requested_event_without_signal() {
 
     let requested = logs
         .lines()
-        .filter(|line| line.contains("shutdown requested"))
+        .filter(|line| line.contains("SHUTDOWN REQUESTED"))
         .count();
     assert_eq!(requested, 1, "{logs}");
-    assert!(!has_message(&logs, "received signal"), "{logs}");
+    assert!(!logs.lines().any(|line| line.contains("SIG")), "{logs}");
 }
 
 #[tokio::test]

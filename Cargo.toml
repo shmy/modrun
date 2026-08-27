@@ -20,7 +20,8 @@ name = "modrun"
 path = "src/lib.rs"
 
 [features]
-default = ["signal"]
+default = ["signal", "logging"]
+logging = ["dep:tracing-subscriber"]
 # OS signal listeners for `ModrunBuilder::run`. Disable with
 # `default-features = false` when you only call `start()` or drive shutdown
 # via `Shutdowner`.
@@ -34,6 +35,11 @@ tokio = { version = "1", default-features = false, features = [
     "sync",
 ] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", optional = true, default-features = false, features = [
+    "env-filter",
+    "fmt",
+    "std",
+] }
 
 [dev-dependencies]
 axum = "0.8"
@@ -67,7 +73,9 @@ harness = false
 [[example]]
 name = "basic"
 path = "examples/basic.rs"
+required-features = ["logging"]
 
 [[example]]
 name = "axum"
 path = "examples/axum.rs"
+required-features = ["logging"]

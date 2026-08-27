@@ -87,11 +87,17 @@ struct ProvideOption {
 impl ModOption for ProvideOption {
     fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
         let type_name = self.provider.result_name();
+        let constructor = self.provider.constructor_name();
         let private = self.private;
         let scope = app.current_scope;
         app.container
             .insert_provider(self.provider, scope, private)?;
-        crate::trace::provided(type_name, app.container.scopes().name(scope), private);
+        crate::trace::provided(
+            type_name,
+            constructor,
+            app.container.scopes().name(scope),
+            private,
+        );
         Ok(())
     }
 }
@@ -158,6 +164,7 @@ type ConstructFn = Box<dyn Fn(&Container) -> Result<ConstructOut> + Send + Sync>
 pub struct DynProvider {
     result_type: TypeId,
     result_name: &'static str,
+    constructor_name: &'static str,
     alias_types: [TypeId; 1],
     deps: DepList,
     construct_fn: ConstructFn,
@@ -193,6 +200,12 @@ impl DynProvider {
         self.result_name
     }
 
+    /// Rust type name of the registered constructor function.
+    #[must_use]
+    pub fn constructor_name(&self) -> &'static str {
+        self.constructor_name
+    }
+
     /// Dependency types this provider will resolve.
     #[must_use]
     pub fn dep_types(&self) -> &[(TypeId, &'static str)] {
@@ -208,10 +221,15 @@ impl DynProvider {
     }
 }
 
-fn dyn_for<T: Send + Sync + 'static>(deps: DepList, construct: ConstructFn) -> DynProvider {
+fn dyn_for<T: Send + Sync + 'static>(
+    constructor_name: &'static str,
+    deps: DepList,
+    construct: ConstructFn,
+) -> DynProvider {
     DynProvider {
         result_type: TypeId::of::<T>(),
         result_name: type_name::<T>(),
+        constructor_name,
         alias_types: [TypeId::of::<Arc<T>>()],
         deps,
         construct_fn: construct,
@@ -242,6 +260,7 @@ macro_rules! impl_use_provide_result_instead {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<std::result::Result<T, ErrTy>>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
                     Box::new(move |_container: &Container| {
                         let value = (self)($(_container.get::<$A>()?,)*);
@@ -267,6 +286,7 @@ macro_rules! impl_use_provide_result_async_instead {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<std::result::Result<T, ErrTy>>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
                     Box::new(move |_container: &Container| {
                         let future = (self)($(_container.get::<$A>()?,)*);
@@ -312,6 +332,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
+                    type_name::<Func>(),
                     DepList::empty(),
                     Box::new(move |_container: &Container| Ok(ready_packed((self)()))),
                 )
@@ -326,6 +347,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
+                    type_name::<Func>(),
                     DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let value = (self)().map_err(ctor_failed::<T>)?;
@@ -343,6 +365,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
+                    type_name::<Func>(),
                     DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let future = (self)();
@@ -363,6 +386,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
+                    type_name::<Func>(),
                     DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let future = (self)();
@@ -415,6 +439,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let value = (self)(
@@ -435,6 +460,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let value = (self)(
@@ -456,6 +482,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let future = (self)(
@@ -480,6 +507,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
+                    type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let future = (self)(

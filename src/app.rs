@@ -101,6 +101,12 @@ impl ModrunBuilder {
 
     /// Total budget for graph construction (async constructors and invokers).
     ///
+    /// Timeouts are cooperative: work that yields at `.await` is cancelled when
+    /// the budget expires. Synchronous blocking (for example `std::thread::sleep`
+    /// inside a sync invoker or constructor) cannot be preempted; after it
+    /// returns, an over-budget success is still reported as
+    /// [`Error::BuildTimeout`](crate::Error::BuildTimeout).
+    ///
     /// If set more than once, the last value wins. [`no_build_timeout`](Self::no_build_timeout)
     /// disables the budget.
     #[must_use]
@@ -130,6 +136,11 @@ impl ModrunBuilder {
 
     /// Total budget for all OnStart hooks.
     ///
+    /// Same cooperative semantics as [`build_timeout`](Self::build_timeout):
+    /// blocking work is not preempted, but an over-budget `Ok` is still turned
+    /// into [`Error::StartTimeout`](crate::Error::StartTimeout). Unwind after a
+    /// failed or cancelled start is budgeted by [`stop_timeout`](Self::stop_timeout).
+    ///
     /// If set more than once, the last value wins. [`no_start_timeout`](Self::no_start_timeout)
     /// disables the budget.
     #[must_use]
@@ -144,7 +155,8 @@ impl ModrunBuilder {
         self
     }
 
-    /// Do not bound OnStart (or the start phase of a cancelled build).
+    /// Do not bound OnStart. Unwind after a failed/cancelled start still uses
+    /// [`stop_timeout`](Self::stop_timeout).
     #[must_use]
     pub fn no_start_timeout(mut self) -> Self {
         self.no_start_timeout_mut();
@@ -159,6 +171,11 @@ impl ModrunBuilder {
 
     /// Total budget for all OnStop hooks (including unwind after a failed or
     /// cancelled start).
+    ///
+    /// Same cooperative semantics as [`build_timeout`](Self::build_timeout):
+    /// blocking OnStop work is not preempted, but an over-budget `Ok` is still
+    /// turned into [`Error::StopTimeout`](crate::Error::StopTimeout) /
+    /// [`Error::UnwindTimeout`](crate::Error::UnwindTimeout).
     ///
     /// If set more than once, the last value wins. [`no_stop_timeout`](Self::no_stop_timeout)
     /// disables the budget.
@@ -223,9 +240,12 @@ impl ModrunBuilder {
 
     /// Build → start hooks → wait for shutdown → stop.
     ///
-    /// Ctrl-C / SIGTERM are wired from the beginning of this call when the
-    /// `signal` crate feature is enabled (on by default). [`start`](Self::start)
-    /// does not install signal handlers.
+    /// When the `signal` crate feature is enabled (on by default), OS signal
+    /// listeners are installed from the beginning of this call on **Unix**
+    /// (Ctrl-C / SIGTERM) and **Windows** (Ctrl-C / Ctrl-Break / Ctrl-Close /
+    /// Ctrl-Shutdown). Other targets ignore the feature for OS signals and rely
+    /// on [`Shutdowner`](crate::Shutdowner) only. [`start`](Self::start) does
+    /// not install signal handlers.
     ///
     /// With `default-features = false`, only [`Shutdowner`](crate::Shutdowner)
     /// unblocks this future.
@@ -531,10 +551,18 @@ async fn with_timeout(
 ) -> Result<()> {
     match budget {
         None => fut.await,
-        Some(d) => match tokio::time::timeout(d, fut).await {
-            Ok(result) => result,
-            Err(_) => Err(timed_out),
-        },
+        Some(d) => {
+            let started = std::time::Instant::now();
+            match tokio::time::timeout(d, fut).await {
+                // Prefer a real phase error over a timeout.
+                Ok(Err(err)) => Err(err),
+                // Sync blocking can prevent the timer from firing until the
+                // work returns; treat an over-budget Ok as a timeout.
+                Ok(Ok(())) if started.elapsed() >= d => Err(timed_out),
+                Ok(Ok(())) => Ok(()),
+                Err(_) => Err(timed_out),
+            }
+        }
     }
 }
 

@@ -55,13 +55,15 @@ async fn main() -> modrun::Result<()> {
 }
 ```
 
-`run()` builds the graph, runs every OnStart hook, waits for Ctrl-C, SIGTERM, or
-[`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html), then runs every OnStop hook in reverse. Signal
-handlers are installed at the start of `run()`, so a shutdown request during
-build or start cancels that phase and unwinds hooks that already started, plus
-any stop-only hooks already registered (even if OnStart never ran). A timeout or
-hook failure still returns an error; a concurrent shutdown does not turn that
-into `Ok(())`.
+`run()` builds the graph, runs every OnStart hook, waits for an OS signal or
+[`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html), then runs every OnStop hook in reverse.
+With the default `signal` feature, handlers are installed at the start of
+`run()` on **Unix** (Ctrl-C / SIGTERM) and **Windows** (Ctrl-C / Ctrl-Break /
+Ctrl-Close / Ctrl-Shutdown); on other targets only [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
+unblocks `run()`. A shutdown request during build or start cancels that phase
+and unwinds hooks that already started, plus any stop-only hooks already
+registered (even if OnStart never ran). A timeout or hook failure still returns
+an error; a concurrent shutdown does not turn that into `Ok(())`.
 Disable the default `signal` feature if you only use `start()` or wait on
 [`Shutdowner::wait`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.wait) yourself.
 
@@ -186,25 +188,23 @@ not on the root builder.
 ## Logging
 
 Framework events (provide / supply / invoke / construct / OnStart / OnStop) are
-emitted through [`tracing`](https://docs.rs/tracing) with target `modrun`, in the
-same spirit as [uber/fx](https://github.com/uber-go/fx)'s `fxevent` logger. Install
-a subscriber in your binary; without one the events are cheap no-ops:
+emitted through [`tracing`](https://docs.rs/tracing) with target `modrun`, using
+[uber/fx](https://github.com/uber-go/fx)-style console lines such as
+`[modrun] PROVIDE    my::Type <= my::new`. Call
+[`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
+once at startup (enabled by default via the `logging` feature); without a subscriber
+the events are cheap no-ops:
 
 ```rust,no_run
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "modrun=info".into()),
-        )
-        .init();
+    modrun::logging::init();
 }
 ```
 
-Or set `RUST_LOG=modrun=info` and call `tracing_subscriber::fmt::init()`.
-Cancelled hooks and constructors emit `cancelled` events. A successful stop emits
-`stopped`. Leak warnings on `RunningApp` go through tracing; debug builds also
-print to stderr.
+Or set `RUST_LOG=modrun=info` and configure your own subscriber without timestamps
+or tracing metadata. Cancelled hooks and constructors emit `ERROR` lines. A
+successful stop emits `STOPPED`. Leak warnings on `RunningApp` go through tracing;
+debug builds also print to stderr.
 
 ## Startup banner
 
@@ -233,12 +233,16 @@ rather than surprises later:
 * the same type provided twice
 
 At runtime, `build_timeout`, `start_timeout`, and `stop_timeout` (15s by default)
-bound graph construction, OnStart, and OnStop respectively. If a timeout is set
-more than once on the builder, the last value wins. `no_build_timeout` /
-`no_start_timeout` / `no_stop_timeout` disable the budget. `stop_timeout` also
-budgets unwind after a failed or cancelled start. When the budget expires,
-remaining OnStop hooks are abandoned and the timeout is reported as an error
-rather than hanging.
+bound graph construction, OnStart, and OnStop respectively. Timeouts are
+cooperative: work that yields at `.await` is cancelled when the budget expires.
+Synchronous blocking (for example `std::thread::sleep` in a sync invoker,
+constructor, or hook) cannot be preempted, but an over-budget success is still
+reported as a timeout error rather than `Ok`. If a timeout is set more than once
+on the builder, the last value wins. `no_build_timeout` / `no_start_timeout` /
+`no_stop_timeout` disable the budget. `no_start_timeout` only disables OnStart;
+`stop_timeout` still budgets unwind after a failed or cancelled start. When the
+budget expires, remaining OnStop hooks are abandoned and the timeout is reported
+as an error rather than hanging.
 
 `run()` treats Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 during build or start as a graceful stop: it unwinds hooks that already started

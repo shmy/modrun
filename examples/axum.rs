@@ -131,7 +131,7 @@ fn http_domain() -> Module {
 
 #[tokio::main]
 async fn main() -> modrun::Result<()> {
-    tracing_subscriber::fmt().init();
+    modrun::logging::init();
 
     Modrun::builder()
         .supply(Config {

@@ -1142,6 +1142,72 @@ async fn build_timeout_errors() {
     );
 }
 
+/// Sync invokers block the worker; `tokio::time::timeout` cannot preempt them,
+/// but an over-budget success must still surface as BuildTimeout.
+#[tokio::test]
+async fn build_timeout_reports_sync_blocking_invoker() {
+    let err = Modrun::builder()
+        .no_banner()
+        .build_timeout(Duration::from_millis(50))
+        .invoke(|| std::thread::sleep(Duration::from_millis(200)))
+        .start()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::BuildTimeout(_)),
+        "expected BuildTimeout, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn start_timeout_reports_sync_blocking_hook() {
+    fn boot(lc: Lifecycle) {
+        lc.append(hook().on_start(|| async {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok(())
+        }))
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .start_timeout(Duration::from_millis(50))
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::StartTimeout(_)),
+        "expected StartTimeout, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn stop_timeout_reports_sync_blocking_hook() {
+    fn boot(lc: Lifecycle) {
+        lc.append(hook().on_stop(|| async {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok(())
+        }))
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .stop_timeout(Duration::from_millis(50))
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::StopTimeout(_)),
+        "expected StopTimeout, got: {err}"
+    );
+}
+
 #[tokio::test]
 async fn no_build_timeout_disables_budget() {
     #[derive(Clone)]

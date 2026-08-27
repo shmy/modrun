@@ -126,22 +126,28 @@
 //! # Logging
 //!
 //! Framework events (provide / supply / invoke / construct / lifecycle) are
-//! emitted through [`tracing`] with target `modrun`, in the spirit of
-//! [uber/fx](https://github.com/uber-go/fx)'s `fxevent` logger. Install a
-//! subscriber in your binary, then filter with `RUST_LOG=modrun=info` (or an
-//! equivalent `EnvFilter`). Without a subscriber the events are cheap no-ops.
-//! Debug builds also print to stderr if a `RunningApp` is dropped without
-//! [`RunningApp::stop`].
+//! emitted through [`tracing`] with target `modrun`, using [uber/fx](https://github.com/uber-go/fx)-style
+//! console lines such as `[modrun] PROVIDE ...`. Call `modrun::logging::init()`
+//! once at startup (requires the `logging` feature), or configure your own
+//! subscriber without timestamps. Filter with `RUST_LOG=modrun=info`. Without a
+//! subscriber the events are cheap no-ops. Debug builds also print to stderr if
+//! a `RunningApp` is dropped without [`RunningApp::stop`].
 //!
 //! ```no_run
-//! tracing_subscriber::fmt::init();
+//! # #[cfg(feature = "logging")]
+//! modrun::logging::init();
 //! ```
 //!
 //! # Crate features
 //!
-//! * **`signal`** *(enabled by default)* — Ctrl-C / SIGTERM listeners in
-//!   [`ModrunBuilder::run`]. Disable with `default-features = false` when you
-//!   only call [`ModrunBuilder::start`] or wait on [`Shutdowner`] yourself.
+//! * **`signal`** *(enabled by default)* — OS signal listeners in
+//!   [`ModrunBuilder::run`] on **Unix** (Ctrl-C / SIGTERM) and **Windows**
+//!   (Ctrl-C / Ctrl-Break / Ctrl-Close / Ctrl-Shutdown). On other targets the
+//!   feature is a no-op for OS signals; use [`Shutdowner`]. Disable with
+//!   `default-features = false` when you only call [`ModrunBuilder::start`] or
+//!   wait on [`Shutdowner`] yourself.
+//! * **`logging`** — `modrun::logging::init()` helper that installs a minimal
+//!   tracing subscriber for fx-style console output.
 
 #![forbid(unsafe_code)]
 
@@ -170,6 +176,9 @@ pub use lifecycle::{Hook, HookFn, Lifecycle, hook};
 pub use module::Module;
 pub use shutdown::Shutdowner;
 pub use timeout::DEFAULT_TIMEOUT;
+
+#[cfg(feature = "logging")]
+pub mod logging;
 
 /// Constructor and invoker bounds, for code that wraps modrun's wiring API.
 /// Convert with [`ProviderFn::into_provider`] / [`InvokeFn::into_invoke`], then

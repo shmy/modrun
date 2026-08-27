@@ -1,0 +1,70 @@
+[package]
+name = "modrun"
+version = "0.1.0"
+edition = "2024"
+# edition 2024 requires 1.85+; keep aligned with CI MSRV job.
+rust-version = "1.85"
+description = "Lightweight app wiring: provide/invoke/lifecycle for Tokio services"
+license = "MIT"
+readme = "README.md"
+authors = ["shmy <chao.w1226@gmail.com>"]
+documentation = "https://docs.rs/modrun"
+keywords = ["dependency-injection", "lifecycle", "tokio", "async", "wiring"]
+categories = ["asynchronous", "development-tools", "rust-patterns"]
+exclude = [".github", "justfile"]
+
+[lib]
+name = "modrun"
+path = "src/lib.rs"
+
+[features]
+default = ["signal"]
+# OS signal listeners for `ModrunBuilder::run`. Disable with
+# `default-features = false` when you only call `start()` or drive shutdown
+# via `Shutdowner`.
+signal = ["tokio/signal"]
+
+[dependencies]
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = [
+    "time",
+    "macros",
+    "sync",
+] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+axum = "0.8"
+criterion = { version = "0.5", features = ["async_tokio"] }
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "net",
+    "signal",
+] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "ansi",
+    "fmt",
+    "std",
+] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[[bench]]
+name = "build"
+harness = false
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "axum"
+path = "examples/axum.rs"

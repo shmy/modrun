@@ -35,6 +35,7 @@ where
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(true)
+        .with_ansi(false)
         .with_writer(move || writer.clone())
         .finish();
 

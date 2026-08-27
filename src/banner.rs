@@ -1,7 +1,12 @@
 use std::borrow::Cow;
+use std::io::IsTerminal;
 
 /// Default ASCII banner printed at startup unless
 /// [`crate::ModrunBuilder::no_banner`] is called.
+///
+/// The default banner is written to stderr and only when stderr is a TTY, so
+/// piped or daemon stdout stays clean. Custom text from
+/// [`crate::ModrunBuilder::banner`] is always written to stderr.
 pub const DEFAULT_BANNER: &str = r"
   __  __           _                  
  |  \/  | ___   __| |_ __ _   _ _ __  
@@ -27,12 +32,15 @@ pub(crate) fn emit(banner: &Banner) {
 }
 
 fn print_default() {
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
     print(DEFAULT_BANNER);
-    println!(
+    eprintln!(
         ":: modrun :: v{} :: Lightweight wiring for Tokio services",
         env!("CARGO_PKG_VERSION")
     );
-    println!();
+    eprintln!();
 }
 
 fn print(text: &str) {
@@ -40,8 +48,8 @@ fn print(text: &str) {
     if body.is_empty() {
         return;
     }
-    println!("{body}");
-    println!();
+    eprintln!("{body}");
+    eprintln!();
 }
 
 #[cfg(test)]
@@ -51,5 +59,10 @@ mod tests {
     #[test]
     fn default_banner_contains_name() {
         assert!(DEFAULT_BANNER.contains("modrun") || DEFAULT_BANNER.contains('|'));
+    }
+
+    #[test]
+    fn off_emits_nothing() {
+        emit(&Banner::Off);
     }
 }

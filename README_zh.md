@@ -159,7 +159,7 @@ Modrun::builder()
 `[modrun] PROVIDE    my::Type <= my::new`。同一批事件还带结构化字段（`constructor`、`module`、`elapsed_ms`、`error` 等），生产环境的 JSON subscriber 可以按字段过滤。
 
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
-给示例和本地二进制用（默认 feature `logging`）。如果已经安装了 subscriber，它是 **no-op**，不会 panic。生产服务应自己装 subscriber，跳过这个助手。没有 subscriber 时，这些事件是廉价空操作：
+给示例和本地二进制用（默认 feature `logging`）。日志打到 stderr，仅在 stderr 是 TTY 时开 ANSI；如果已经安装了 subscriber，它是 **no-op**，不会 panic。生产服务应自己装 subscriber，跳过这个助手。没有 subscriber 时，这些事件是廉价空操作：
 
 ```rust,no_run
 fn main() {
@@ -173,7 +173,7 @@ fn main() {
 ## 启动 Banner
 
 [`ModrunBuilder::run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run) 和
-[`start`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.start) 在装配开始前会往 stdout 打一份 modrun ASCII banner（Spring Boot 风格）。自定义文本（或在自己的 crate 里 `include_str!("banner.txt")`）：
+[`start`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.start) 在装配开始前会往 stderr 打一份 modrun ASCII banner（Spring Boot 风格），且仅当 stderr 是 TTY。自定义文本（或在自己的 crate 里 `include_str!("banner.txt")`）总会打到 stderr：
 
 ```rust,no_run
 # use modrun::Modrun;
@@ -184,7 +184,7 @@ Modrun::builder()
 ```
 
 用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner) 关掉。
-生产和测试里请关掉，避免 ASCII 画和业务日志混在 stdout。
+管道和没有 TTY 的守护进程会自动跳过默认 banner。在终端里跑的测试仍应调用 `.no_banner()`，避免捕获到的 stderr 被 ASCII 画弄乱。
 
 ## 失败模式
 
@@ -276,7 +276,7 @@ Modrun::builder()
 # }
 ```
 
-hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默认预算是 15s。测试里请用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)，避免 stdout 被 banner 弄乱。
+hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默认预算是 15s。在终端里跑的测试请用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)，避免 stderr 被 banner 弄乱。
 
 ## 错误
 

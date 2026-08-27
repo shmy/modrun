@@ -229,9 +229,10 @@ can filter them in production.
 
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
 is for examples and local binaries (enabled by default via the `logging`
-feature). It is a **no-op** if a subscriber is already installed and will not
-panic. Production services should install their own subscriber and skip this
-helper. Without a subscriber the events are cheap no-ops:
+feature). It writes to stderr, enables ANSI only when stderr is a TTY, and is a
+**no-op** if a subscriber is already installed (it will not panic). Production
+services should install their own subscriber and skip this helper. Without a
+subscriber the events are cheap no-ops:
 
 ```rust,no_run
 fn main() {
@@ -248,8 +249,9 @@ warnings on `RunningApp` go through tracing; debug builds also print to stderr.
 
 [`ModrunBuilder::run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run) and
 [`start`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.start) print a modrun
-ASCII banner to stdout before wiring (Spring Boot style). Custom text
-(or `include_str!("banner.txt")` in your crate):
+ASCII banner to stderr before wiring (Spring Boot style), and only when stderr
+is a TTY. Custom text (or `include_str!("banner.txt")` in your crate) is always
+printed to stderr:
 
 ```rust,no_run
 # use modrun::Modrun;
@@ -260,8 +262,9 @@ Modrun::builder()
 ```
 
 Disable with [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner).
-Use that in production and in tests so the ASCII art does not land in stdout
-next to application logs.
+Piped processes and daemons without a TTY skip the default banner automatically.
+Tests that run in a terminal should still call `.no_banner()` so captured stderr
+stays quiet.
 
 ## Failure modes
 
@@ -387,7 +390,7 @@ Modrun::builder()
 
 Tests that sleep in hooks should set an explicit timeout (or `no_start_timeout`);
 the default budget is 15s. Prefer [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)
-so stdout stays quiet.
+so stderr stays quiet when tests run in a terminal.
 
 ## Errors
 

@@ -214,8 +214,9 @@ impl ModrunBuilder {
     /// Replace the default modrun banner with custom text (for example
     /// `include_str!("banner.txt")`).
     ///
-    /// Printed to stdout once at the beginning of [`run`](Self::run) or
-    /// [`start`](Self::start), before framework tracing events.
+    /// Printed to stderr once at the beginning of [`run`](Self::run) or
+    /// [`start`](Self::start), before framework tracing events. Unlike the
+    /// default banner, custom text is printed even when stderr is not a TTY.
     #[must_use]
     pub fn banner(mut self, text: impl Into<std::borrow::Cow<'static, str>>) -> Self {
         self.banner_mut(text);
@@ -229,6 +230,9 @@ impl ModrunBuilder {
     }
 
     /// Do not print a startup banner.
+    ///
+    /// The default banner is already skipped when stderr is not a TTY. Call this
+    /// from tests that run in a terminal, or when the ASCII art is never wanted.
     #[must_use]
     pub fn no_banner(mut self) -> Self {
         self.no_banner_mut();

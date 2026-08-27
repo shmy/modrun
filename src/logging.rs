@@ -27,7 +27,7 @@ use tracing_subscriber::registry::LookupSpan;
 /// need to know whether this helper won. Production processes should set up
 /// their own subscriber and skip this function.
 ///
-/// ANSI colors are enabled only when stderr is a terminal.
+/// Writes to stderr. ANSI colors are enabled only when stderr is a terminal.
 pub fn init() {
     let _ = try_init();
 }
@@ -44,7 +44,7 @@ pub fn try_init() -> bool {
 /// Install a minimal tracing subscriber with an explicit filter.
 ///
 /// No-op when a subscriber is already installed. See [`init`].
-/// ANSI colors are enabled only when stderr is a terminal.
+/// Writes to stderr. ANSI colors are enabled only when stderr is a terminal.
 pub fn init_with_filter(filter: EnvFilter) {
     let _ = try_init_with_filter(filter);
 }
@@ -54,6 +54,7 @@ pub fn init_with_filter(filter: EnvFilter) {
 #[must_use]
 pub fn try_init_with_filter(filter: EnvFilter) -> bool {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(filter)
         .with_ansi(std::io::stderr().is_terminal())
         .event_format(MessageOnly)

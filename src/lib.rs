@@ -119,10 +119,10 @@
 //! # Startup banner
 //!
 //! [`ModrunBuilder::run`] and [`ModrunBuilder::start`] print a modrun ASCII banner
-//! to stdout before wiring begins (Spring Boot style). Override with
-//! [`.banner(text)`](ModrunBuilder::banner) or disable with
-//! [`.no_banner()`](ModrunBuilder::no_banner). Production services should call
-//! `.no_banner()` so stdout is not mixed with application logs.
+//! to stderr before wiring begins (Spring Boot style), and only when stderr is a
+//! TTY. Override with [`.banner(text)`](ModrunBuilder::banner) (always printed to
+//! stderr) or disable with [`.no_banner()`](ModrunBuilder::no_banner). Tests that
+//! run in a terminal should call `.no_banner()` so captured stderr stays quiet.
 //!
 //! # Logging
 //!
@@ -132,7 +132,7 @@
 //! fields (`constructor`, `module`, `elapsed_ms`, …) for JSON subscribers.
 //! Call `modrun::logging::init()` from examples and local binaries
 //! (requires the `logging` feature); it is a no-op if a subscriber is already
-//! installed, and enables ANSI only when stderr is a terminal. Production
+//! installed, writes to stderr, and enables ANSI only when stderr is a terminal. Production
 //! processes should install their own subscriber and
 //! filter with `RUST_LOG=modrun=info`. Without a subscriber the events are
 //! cheap no-ops. Debug builds also print to stderr if a `RunningApp` is dropped

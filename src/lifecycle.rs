@@ -306,7 +306,7 @@ impl Drop for InflightHook {
         );
         if !self.finished {
             if let Some(lc) = self.lifecycle.take() {
-                lc.reject_append_and_activate_trailing();
+                lc.prepare_for_unwind();
             }
         }
     }
@@ -532,7 +532,9 @@ impl Lifecycle {
                     let err = err.with_hook_name(name);
                     inflight.fail(&err);
                     // Drop `hook` without putting it back — its OnStop must not run.
-                    self.reject_append_and_activate_trailing();
+                    // Same activation as cancel/timeout: remaining stop-only
+                    // hooks run even if a later start hook never ran.
+                    self.prepare_for_unwind();
                     return Err(err);
                 }
             }
@@ -558,23 +560,6 @@ impl Lifecycle {
                     state.hooks[idx].inner = None;
                     state.started += 1;
                 }
-            }
-        }
-    }
-
-    fn reject_append_and_activate_trailing(&self) {
-        let mut state = self.state();
-        state.phase = Phase::Stopping;
-        while state.started < state.hooks.len() {
-            let skip = match state.hooks[state.started].inner.as_ref() {
-                // In-flight or failed start: skip this slot without running stop.
-                None => true,
-                Some(hook) => !hook.has_start(),
-            };
-            if skip {
-                state.started += 1;
-            } else {
-                break;
             }
         }
     }
@@ -719,6 +704,32 @@ mod tests {
         .unwrap();
 
         lc.prepare_for_unwind();
+        lc.unwind_started().await.unwrap();
+        assert_eq!(log.lock().unwrap().as_slice(), ["stop-only"]);
+    }
+
+    #[tokio::test]
+    async fn failed_start_runs_stop_only_after_unstarted_hooks() {
+        let lc = Lifecycle::new(Shutdowner::new());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
+            .unwrap();
+        lc.append(hook().on_start(|| async {
+            panic!("later start hook must not run after failed start");
+        }))
+        .unwrap();
+        let only = Arc::clone(&log);
+        lc.append(hook().on_stop(move || {
+            let only = Arc::clone(&only);
+            async move {
+                only.lock().unwrap().push("stop-only");
+                Ok(())
+            }
+        }))
+        .unwrap();
+
+        let err = lc.start().await.unwrap_err();
+        assert!(format!("{err}").contains("boom"), "unexpected: {err}");
         lc.unwind_started().await.unwrap();
         assert_eq!(log.lock().unwrap().as_slice(), ["stop-only"]);
     }

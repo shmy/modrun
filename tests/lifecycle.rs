@@ -1421,6 +1421,37 @@ async fn struct_stop_only_after_failed_start_still_runs() {
 }
 
 #[tokio::test]
+async fn failed_start_runs_stop_only_after_unstarted_hook() {
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
+
+    fn boot(lc: Lifecycle, log: Log) {
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
+            .unwrap();
+        lc.append(hook().on_start(|| async {
+            panic!("later start hook must not run after failed start");
+        }))
+        .unwrap();
+        let stopped = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(stopped, |stopped| {
+            stopped.lock().unwrap().push("stop-only");
+            Ok(())
+        })))
+        .unwrap();
+    }
+
+    let log = Log(Arc::new(Mutex::new(Vec::new())));
+    let err = Modrun::builder()
+        .supply(log.clone())
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("boom"), "unexpected: {err}");
+    assert_eq!(log.0.lock().unwrap().as_slice(), ["stop-only"]);
+}
+
+#[tokio::test]
 async fn struct_stop_only_without_has_start_is_skipped_on_unwind() {
     #[derive(Clone)]
     struct Log(Arc<Mutex<Vec<&'static str>>>);

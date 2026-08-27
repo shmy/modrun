@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * MSRV lowered from 1.88 to **1.85** (edition 2024 floor; let-chains are unused). CI checks the library with `cargo test` (not `--all-targets`) so examples/benches are not bound to that MSRV.
-* [`logging::init`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html) is a no-op when a tracing subscriber is already installed (it no longer panics). ANSI follows stderr (TTY only).
+* [`logging::init`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html) is a no-op when a tracing subscriber is already installed (it no longer panics). The helper writes to stderr; ANSI follows stderr (TTY only).
+* Default startup banner is printed to stderr, and only when stderr is a TTY. [`.banner(text)`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.banner) still prints custom text to stderr even when not a TTY.
 * [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html) is `#[non_exhaustive]`; use accessors (`count()`, `summary()`, `errors()`).
 * `std::io::Error` no longer converts with `From`. Use [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) with a context label.
 * Panic during invoke / construct / OnStart / OnStop is traced as `panicked`, not `cancelled`.
@@ -32,3 +33,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 * OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.
+* OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.

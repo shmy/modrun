@@ -10,8 +10,8 @@ macro_rules! impl_wiring_methods {
             /// (or by cloning an `Arc<T>` if the parameter is `Arc<T>`).
             ///
             /// Constructors that return `Result<T, E>` must use
-            /// [`provide_result`](Self::provide_result) instead — this method
-            /// registers the `Result` type itself.
+            /// [`provide_result`](Self::provide_result) instead; passing one here
+            /// is a compile error.
             #[must_use]
             pub fn provide<M, F>(mut self, ctor: F) -> Self
             where

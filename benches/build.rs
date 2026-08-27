@@ -21,6 +21,7 @@ fn build_small(c: &mut Criterion) {
             struct Svc(u32);
 
             Modrun::builder()
+                .no_banner()
                 .supply(Cfg(1))
                 .provide(|c: Cfg| Svc(c.0 + 1))
                 .invoke(|_: Svc| {})
@@ -66,6 +67,7 @@ fn build_deep_modules(c: &mut Criterion) {
             }
 
             Modrun::builder()
+                .no_banner()
                 .module(module)
                 .start()
                 .await
@@ -93,6 +95,7 @@ fn lifecycle_hooks(c: &mut Criterion) {
             }
 
             Modrun::builder()
+                .no_banner()
                 .invoke(boot)
                 .start()
                 .await
@@ -135,6 +138,7 @@ fn async_independent_ctors(c: &mut Criterion) {
             }
 
             Modrun::builder()
+                .no_banner()
                 .provide_async(a)
                 .provide_async(b)
                 .provide_async(c)

@@ -28,8 +28,8 @@
 //! fn new_config() -> Config { Config { port: 8080 } }
 //! fn new_server(cfg: Config) -> Server { Server { cfg } }
 //!
-//! fn boot(lc: Lifecycle, server: Server) {
-//!     lc.append(server).unwrap();
+//! fn boot(lc: Lifecycle, server: Server) -> modrun::Result<()> {
+//!     lc.append(server)
 //! }
 //!
 //! #[tokio::main]

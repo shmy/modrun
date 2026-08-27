@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId, type_name};
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
@@ -11,18 +12,75 @@ use crate::shutdown::Shutdowner;
 
 pub(crate) type DynAny = Arc<dyn Any + Send + Sync>;
 
+/// Hasher for keys built out of a [`TypeId`].
+///
+/// `TypeId` is already a well-distributed hash, so feeding it through SipHash a
+/// second time only costs cycles. Compound keys — `(TypeId, ScopeId)` and
+/// [`ProviderKey`] — fold each field into the accumulator so the extra
+/// discriminants still contribute.
+#[derive(Default)]
+pub(crate) struct TypeIdHasher(u64);
+
+impl TypeIdHasher {
+    fn fold(&mut self, value: u64) {
+        self.0 = self.0.rotate_left(11) ^ value;
+    }
+}
+
+impl Hasher for TypeIdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    /// Never taken by the key types used here; FNV-1a keeps it non-degenerate
+    /// in case a future key hashes raw bytes.
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn write_u8(&mut self, n: u8) {
+        self.fold(u64::from(n));
+    }
+
+    fn write_u16(&mut self, n: u16) {
+        self.fold(u64::from(n));
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.fold(u64::from(n));
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.fold(n);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.fold(n as u64);
+    }
+
+    fn write_u128(&mut self, n: u128) {
+        self.fold(n as u64);
+        self.fold((n >> 64) as u64);
+    }
+}
+
+type TypeIdMap<K, V> = HashMap<K, V, BuildHasherDefault<TypeIdHasher>>;
+type TypeIdSet<K> = HashSet<K, BuildHasherDefault<TypeIdHasher>>;
+
 /// Value produced by a constructor, plus `Arc<T>` aliases stored under their
 /// own [`TypeId`] so invokers can take `Arc<T>` without `T: Clone`.
 pub(crate) struct Constructed {
     pub value: DynAny,
-    pub aliases: Vec<(TypeId, DynAny)>,
+    pub aliases: [(TypeId, DynAny); 1],
 }
 
 pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
     let arc = Arc::new(value);
     Constructed {
         value: Arc::clone(&arc) as DynAny,
-        aliases: vec![(TypeId::of::<Arc<T>>(), Arc::new(arc) as DynAny)],
+        aliases: [(TypeId::of::<Arc<T>>(), Arc::new(arc) as DynAny)],
     }
 }
 
@@ -55,17 +113,17 @@ struct ProviderKey {
 
 pub(crate) struct Container {
     scopes: ScopeTree,
-    values_public: HashMap<TypeId, DynAny>,
-    values_private: HashMap<(TypeId, ScopeId), DynAny>,
-    providers: HashMap<ProviderKey, Arc<dyn Provider>>,
+    values_public: TypeIdMap<TypeId, DynAny>,
+    values_private: TypeIdMap<(TypeId, ScopeId), DynAny>,
+    providers: TypeIdMap<ProviderKey, Arc<dyn Provider>>,
     /// Public provider keys keyed by result type *and* `Arc<T>` aliases.
-    public_index: HashMap<TypeId, ProviderKey>,
+    public_index: TypeIdMap<TypeId, ProviderKey>,
     /// Private `Arc<T>` aliases → canonical private provider key.
-    private_alias: HashMap<(TypeId, ScopeId), ProviderKey>,
+    private_alias: TypeIdMap<(TypeId, ScopeId), ProviderKey>,
     /// Registration order, used for stable wave ordering and cycle walks.
     provider_order: Vec<ProviderKey>,
-    provider_order_index: HashMap<ProviderKey, usize>,
-    constructing: HashSet<ProviderKey>,
+    provider_order_index: TypeIdMap<ProviderKey, usize>,
+    constructing: TypeIdSet<ProviderKey>,
     active_scope: ScopeId,
 }
 
@@ -87,14 +145,14 @@ impl Container {
     pub(crate) fn new() -> Self {
         Self {
             scopes: ScopeTree::new(),
-            values_public: HashMap::new(),
-            values_private: HashMap::new(),
-            providers: HashMap::new(),
-            public_index: HashMap::new(),
-            private_alias: HashMap::new(),
+            values_public: TypeIdMap::default(),
+            values_private: TypeIdMap::default(),
+            providers: TypeIdMap::default(),
+            public_index: TypeIdMap::default(),
+            private_alias: TypeIdMap::default(),
             provider_order: Vec::new(),
-            provider_order_index: HashMap::new(),
-            constructing: HashSet::new(),
+            provider_order_index: TypeIdMap::default(),
+            constructing: TypeIdSet::default(),
             active_scope: ScopeId::ROOT,
         }
     }
@@ -224,7 +282,7 @@ impl Container {
     /// in the same layer.
     pub(crate) async fn ensure_built(&mut self, roots: &[(TypeId, &'static str)]) -> Result<()> {
         let from = self.active_scope;
-        let mut pending = HashSet::new();
+        let mut pending = TypeIdSet::default();
         for &(id, name) in roots {
             self.collect_pending(id, name, from, &mut pending)?;
         }
@@ -354,7 +412,7 @@ impl Container {
         id: TypeId,
         name: &'static str,
         from: ScopeId,
-        pending: &mut HashSet<ProviderKey>,
+        pending: &mut TypeIdSet<ProviderKey>,
     ) -> Result<()> {
         if self.lookup_value_ref_from(id, from).is_some() {
             return Ok(());
@@ -378,7 +436,7 @@ impl Container {
         Ok(())
     }
 
-    fn ready_wave(&self, pending: &HashSet<ProviderKey>) -> Vec<ProviderKey> {
+    fn ready_wave(&self, pending: &TypeIdSet<ProviderKey>) -> Vec<ProviderKey> {
         let mut ready: Vec<_> = pending
             .iter()
             .copied()
@@ -478,8 +536,8 @@ impl Container {
     }
 
     fn detect_cycles(&self) -> Result<()> {
-        let mut done = HashSet::new();
-        let mut on_path = HashSet::new();
+        let mut done = TypeIdSet::default();
+        let mut on_path = TypeIdSet::default();
         let mut path = Vec::new();
         for &key in &self.provider_order {
             self.visit(key, &mut done, &mut on_path, &mut path)?;
@@ -490,8 +548,8 @@ impl Container {
     fn visit(
         &self,
         key: ProviderKey,
-        done: &mut HashSet<ProviderKey>,
-        on_path: &mut HashSet<ProviderKey>,
+        done: &mut TypeIdSet<ProviderKey>,
+        on_path: &mut TypeIdSet<ProviderKey>,
         path: &mut Vec<ProviderKey>,
     ) -> Result<()> {
         if done.contains(&key) {

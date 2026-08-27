@@ -51,15 +51,6 @@ struct ProvideOption {
 impl ModOption for ProvideOption {
     fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
         let type_name = self.provider.result_name();
-        if type_name.starts_with("core::result::Result<")
-            || type_name.starts_with("std::result::Result<")
-        {
-            tracing::warn!(
-                target: crate::trace::TARGET,
-                type_name,
-                "constructor appears to return Result; use provide_result instead of provide"
-            );
-        }
         let private = app.private_mode;
         let scope = app.current_scope;
         app.container
@@ -72,8 +63,21 @@ impl ModOption for ProvideOption {
 /// Bound for constructors accepted by [`ModrunBuilder::provide`](crate::ModrunBuilder::provide).
 ///
 /// Constructors that return `Result<T, E>` must use
-/// [`provide_result`](crate::ModrunBuilder::provide_result) (or the async
-/// variants) instead — `provide` registers the `Result` type itself.
+/// [`provide_result`](crate::ModrunBuilder::provide_result) instead. Passing one
+/// to `provide` does not compile:
+///
+/// ```compile_fail
+/// # use modrun::Modrun;
+/// #[derive(Clone)]
+/// struct Config;
+///
+/// fn new_config() -> Result<Config, std::io::Error> {
+///     Ok(Config)
+/// }
+///
+/// // error[E0283]: cannot infer type of the type parameter `M`
+/// Modrun::builder().provide(new_config);
+/// ```
 ///
 /// Implemented for any `Fn(A, B, ..) -> T` of up to **eight** `Clone` arguments.
 /// Constructor closures must be `Send + Sync`; keep `!Sync` state inside `T` or
@@ -95,6 +99,10 @@ pub trait FallibleProviderFn<Marker>: Sized {
 
 /// Bound for async constructors accepted by
 /// [`ModrunBuilder::provide_async`](crate::ModrunBuilder::provide_async).
+///
+/// As with [`ProviderFn`], an `async fn` returning `Result<T, E>` belongs on
+/// [`provide_result_async`](crate::ModrunBuilder::provide_result_async) and does
+/// not compile here.
 pub trait AsyncProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;
@@ -114,7 +122,7 @@ type ConstructFn = Box<dyn Fn(&Container) -> Result<ConstructFuture> + Send + Sy
 pub struct DynProvider {
     result_type: TypeId,
     result_name: &'static str,
-    alias_types: Vec<TypeId>,
+    alias_types: [TypeId; 1],
     deps: Vec<(TypeId, &'static str)>,
     construct: ConstructFn,
 }
@@ -180,7 +188,7 @@ fn dyn_for<T: Send + Sync + 'static>(
     DynProvider {
         result_type: TypeId::of::<T>(),
         result_name: type_name::<T>(),
-        alias_types: vec![TypeId::of::<Arc<T>>()],
+        alias_types: [TypeId::of::<Arc<T>>()],
         deps,
         construct,
     }
@@ -194,8 +202,67 @@ fn ctor_failed<T: ?Sized>(err: impl Into<crate::error::BoxError>) -> crate::erro
     user_ctor_err::<T>(err)
 }
 
+/// Registers a second [`ProviderFn`] marker that also matches a `Result`-returning
+/// constructor. Both markers then apply, so `provide(fallible_ctor)` fails to infer
+/// `Marker` and the compiler points at this impl — which names
+/// [`provide_result`](crate::ModrunBuilder::provide_result) — instead of the type
+/// checking out and `Result<T, E>` silently becoming the registered type.
+macro_rules! impl_use_provide_result_instead {
+    ($guard:ident, $($A:ident),*) => {
+        impl<Func, T, ErrTy, $($A),*> ProviderFn<$guard<T, ErrTy, $($A),*>> for Func
+        where
+            Func: Fn($($A),*) -> std::result::Result<T, ErrTy> + Send + Sync + 'static,
+            T: Send + Sync + 'static,
+            ErrTy: Send + Sync + 'static,
+            $($A: Clone + Send + Sync + 'static,)*
+        {
+            fn into_provider(self) -> DynProvider {
+                dyn_for::<std::result::Result<T, ErrTy>>(
+                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)*],
+                    Box::new(move |_container: &Container| {
+                        let value = (self)($(_container.get::<$A>()?,)*);
+                        Ok(ready_packed(value))
+                    }),
+                )
+            }
+        }
+    };
+}
+
+/// [`impl_use_provide_result_instead`] for `provide_async` /
+/// [`provide_result_async`](crate::ModrunBuilder::provide_result_async).
+macro_rules! impl_use_provide_result_async_instead {
+    ($guard:ident, $($A:ident),*) => {
+        impl<Func, Fut, T, ErrTy, $($A),*> AsyncProviderFn<$guard<T, ErrTy, $($A),*>> for Func
+        where
+            Func: Fn($($A),*) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = std::result::Result<T, ErrTy>> + Send + 'static,
+            T: Send + Sync + 'static,
+            ErrTy: Send + Sync + 'static,
+            $($A: Clone + Send + Sync + 'static,)*
+        {
+            fn into_provider(self) -> DynProvider {
+                dyn_for::<std::result::Result<T, ErrTy>>(
+                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)*],
+                    Box::new(move |_container: &Container| {
+                        let future = (self)($(_container.get::<$A>()?,)*);
+                        Ok(Box::pin(async move { Ok(pack(future.await)) }))
+                    }),
+                )
+            }
+        }
+    };
+}
+
 macro_rules! impl_provider_fn_zero {
-    ($marker:ident, $fallible:ident, $async_marker:ident, $async_fallible:ident) => {
+    (
+        $marker:ident,
+        $fallible:ident,
+        $async_marker:ident,
+        $async_fallible:ident,
+        $use_provide_result:ident,
+        $use_provide_result_async:ident
+    ) => {
         #[doc(hidden)]
         pub struct $marker<Out>(PhantomData<fn() -> Out>);
         #[doc(hidden)]
@@ -204,6 +271,13 @@ macro_rules! impl_provider_fn_zero {
         pub struct $async_marker<Out>(PhantomData<fn() -> Out>);
         #[doc(hidden)]
         pub struct $async_fallible<T, ErrTy>(PhantomData<fn() -> (T, ErrTy)>);
+        #[doc(hidden)]
+        pub struct $use_provide_result<T, ErrTy>(PhantomData<fn() -> (T, ErrTy)>);
+        #[doc(hidden)]
+        pub struct $use_provide_result_async<T, ErrTy>(PhantomData<fn() -> (T, ErrTy)>);
+
+        impl_use_provide_result_instead!($use_provide_result,);
+        impl_use_provide_result_async_instead!($use_provide_result_async,);
 
         impl<Func, Out> ProviderFn<$marker<Out>> for Func
         where
@@ -276,7 +350,15 @@ macro_rules! impl_provider_fn_zero {
 }
 
 macro_rules! impl_provider_fn {
-    ($marker:ident, $fallible:ident, $async_marker:ident, $async_fallible:ident, $($A:ident),+) => {
+    (
+        $marker:ident,
+        $fallible:ident,
+        $async_marker:ident,
+        $async_fallible:ident,
+        $use_provide_result:ident,
+        $use_provide_result_async:ident,
+        $($A:ident),+
+    ) => {
         #[doc(hidden)]
         pub struct $marker <Out, $($A),+>(PhantomData<fn() -> (Out, $($A,)+)>);
         #[doc(hidden)]
@@ -285,6 +367,17 @@ macro_rules! impl_provider_fn {
         pub struct $async_marker <Out, $($A),+>(PhantomData<fn() -> (Out, $($A,)+)>);
         #[doc(hidden)]
         pub struct $async_fallible <T, ErrTy, $($A),+>(PhantomData<fn() -> (T, ErrTy, $($A,)+)>);
+        #[doc(hidden)]
+        pub struct $use_provide_result <T, ErrTy, $($A),+>(
+            PhantomData<fn() -> (T, ErrTy, $($A,)+)>,
+        );
+        #[doc(hidden)]
+        pub struct $use_provide_result_async <T, ErrTy, $($A),+>(
+            PhantomData<fn() -> (T, ErrTy, $($A,)+)>,
+        );
+
+        impl_use_provide_result_instead!($use_provide_result, $($A),+);
+        impl_use_provide_result_async_instead!($use_provide_result_async, $($A),+);
 
         impl<Func, Out, $($A),+> ProviderFn<$marker<Out, $($A),+>> for Func
         where
@@ -373,14 +466,40 @@ macro_rules! impl_provider_fn {
     };
 }
 
-impl_provider_fn_zero!(Provider0, Fallible0, AsyncProvider0, AsyncFallible0);
-impl_provider_fn!(Provider1, Fallible1, AsyncProvider1, AsyncFallible1, A);
-impl_provider_fn!(Provider2, Fallible2, AsyncProvider2, AsyncFallible2, A, B);
+impl_provider_fn_zero!(
+    Provider0,
+    Fallible0,
+    AsyncProvider0,
+    AsyncFallible0,
+    UseProvideResult0,
+    UseProvideResultAsync0
+);
+impl_provider_fn!(
+    Provider1,
+    Fallible1,
+    AsyncProvider1,
+    AsyncFallible1,
+    UseProvideResult1,
+    UseProvideResultAsync1,
+    A
+);
+impl_provider_fn!(
+    Provider2,
+    Fallible2,
+    AsyncProvider2,
+    AsyncFallible2,
+    UseProvideResult2,
+    UseProvideResultAsync2,
+    A,
+    B
+);
 impl_provider_fn!(
     Provider3,
     Fallible3,
     AsyncProvider3,
     AsyncFallible3,
+    UseProvideResult3,
+    UseProvideResultAsync3,
     A,
     B,
     C
@@ -390,6 +509,8 @@ impl_provider_fn!(
     Fallible4,
     AsyncProvider4,
     AsyncFallible4,
+    UseProvideResult4,
+    UseProvideResultAsync4,
     A,
     B,
     C,
@@ -400,6 +521,8 @@ impl_provider_fn!(
     Fallible5,
     AsyncProvider5,
     AsyncFallible5,
+    UseProvideResult5,
+    UseProvideResultAsync5,
     A,
     B,
     C,
@@ -411,6 +534,8 @@ impl_provider_fn!(
     Fallible6,
     AsyncProvider6,
     AsyncFallible6,
+    UseProvideResult6,
+    UseProvideResultAsync6,
     A,
     B,
     C,
@@ -423,6 +548,8 @@ impl_provider_fn!(
     Fallible7,
     AsyncProvider7,
     AsyncFallible7,
+    UseProvideResult7,
+    UseProvideResultAsync7,
     A,
     B,
     C,
@@ -436,6 +563,8 @@ impl_provider_fn!(
     Fallible8,
     AsyncProvider8,
     AsyncFallible8,
+    UseProvideResult8,
+    UseProvideResultAsync8,
     A,
     B,
     C,

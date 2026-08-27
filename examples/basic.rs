@@ -48,8 +48,8 @@ impl Hook for Greeter {
     }
 }
 
-fn register(lc: Lifecycle, greeter: Greeter) {
-    lc.append(greeter).expect("register greeter hooks");
+fn register(lc: Lifecycle, greeter: Greeter) -> modrun::Result<()> {
+    lc.append(greeter)
 }
 
 fn greeter_domain() -> Module {

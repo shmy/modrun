@@ -107,7 +107,12 @@ impl Hook for HttpServer {
     }
 }
 
-fn register_http(lc: Lifecycle, cfg: Config, state: AppState, shutdown: Shutdowner) {
+fn register_http(
+    lc: Lifecycle,
+    cfg: Config,
+    state: AppState,
+    shutdown: Shutdowner,
+) -> modrun::Result<()> {
     lc.append(HttpServer {
         cfg,
         state,
@@ -115,7 +120,6 @@ fn register_http(lc: Lifecycle, cfg: Config, state: AppState, shutdown: Shutdown
         stop_tx: None,
         task: None,
     })
-    .expect("register http hooks");
 }
 
 fn http_domain() -> Module {

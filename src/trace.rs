@@ -32,6 +32,10 @@ fn user_deps(deps: &[(TypeId, &'static str)]) -> String {
 }
 
 pub(crate) fn invoking(function: &str, deps: &[(TypeId, &'static str)], scope_name: &'static str) {
+    // `user_deps` allocates, so skip it entirely when nothing is listening.
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
     let user_deps = user_deps(deps);
     match (module_label(scope_name), user_deps.is_empty()) {
         (Some(module), true) => {
@@ -55,6 +59,9 @@ pub(crate) fn invoke_failed(
     scope_name: &'static str,
     err: &crate::Error,
 ) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::ERROR) {
+        return;
+    }
     let user_deps = user_deps(deps);
     match module_label(scope_name) {
         Some(module) if user_deps.is_empty() => {

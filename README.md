@@ -40,8 +40,8 @@ fn new_server(cfg: Config) -> Server {
     Server { cfg }
 }
 
-fn boot(lc: Lifecycle, server: Server) {
-    lc.append(server).unwrap();
+fn boot(lc: Lifecycle, server: Server) -> modrun::Result<()> {
+    lc.append(server)
 }
 
 #[tokio::main]
@@ -69,8 +69,8 @@ Disable the default `signal` feature if you only use `start()` or wait on
 
 **`provide`** registers a constructor. Nothing is built until something asks for it,
 and each type is built at most once. Constructors that return `Result<T, E>` must
-use `provide_result` (or `provide_result_async`) — plain `provide` registers the
-`Result` type itself. `provide_async` and `provide_result_async` take `async fn`s.
+use `provide_result` (or `provide_result_async`); handing one to plain `provide`
+is a compile error. `provide_async` and `provide_result_async` take `async fn`s.
 When several independent constructors are needed at once, modrun builds them by
 DAG layer: **async** constructors in the same layer are polled concurrently on one
 task; **sync** constructors run inside `construct()` and defer creation of later
@@ -91,7 +91,9 @@ and any OnStop failures are retained in the returned error. A start hook that fa
 or is cancelled mid-flight does **not** run its own OnStop. A stop-only hook (one
 without OnStart) is considered active immediately and is included in unwind.
 Register hooks during `invoke` (or from an OnStart factory);
-`append` returns an error if start has already finished or stop has begun.
+`append` returns an error if start has already finished or stop has begun. An
+invoker may itself return `modrun::Result<()>`, so give `boot` that return type
+and hand the `append` result straight back instead of unwrapping it.
 Implement [`Hook`](https://docs.rs/modrun/latest/modrun/trait.Hook.html) on a
 struct when start and stop share state (`&mut self`). For a struct that only
 implements OnStop, override [`has_start`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.has_start)

@@ -44,16 +44,24 @@ impl Shutdowner {
 
     /// Request a graceful shutdown.
     ///
-    /// See the [type-level docs](Self) for cooperative cancellation and for
-    /// unblocking [`ModrunBuilder::run`](crate::ModrunBuilder::run) after a
-    /// background task fails.
+    /// Unblocks [`ModrunBuilder::run`](crate::ModrunBuilder::run). During build
+    /// or start this is a graceful stop: if cleanup succeeds, `run` returns
+    /// `Ok(())`. After the app is running, stop hooks run and `run` returns
+    /// their result.
+    ///
+    /// Custom work spawned with [`tokio::spawn`] should call this if it can fail
+    /// after start. [`crate::task`] does **not** use this method on failure —
+    /// it uses a separate path so a start-phase interrupt is an error, not
+    /// `Ok(())`.
     pub fn shutdown(&self) {
         self.inner.requested.store(true, Ordering::Release);
         self.inner.notify.notify_waiters();
     }
 
-    /// Like [`shutdown`](Self::shutdown), but `run` treats a start-phase
-    /// interrupt as a failure rather than a graceful `Ok(())`.
+    /// Request shutdown after a background [`crate::task`] failed.
+    ///
+    /// Unlike [`shutdown`](Self::shutdown), [`ModrunBuilder::run`](crate::ModrunBuilder::run)
+    /// treats a start-phase interrupt as an error rather than a graceful `Ok(())`.
     pub(crate) fn fail(&self) {
         self.inner.from_failure.store(true, Ordering::Release);
         self.shutdown();

@@ -173,10 +173,11 @@ pub struct PreparedTask<P, R> {
 /// port inside `run` — that failure would only show up on stop. Use
 /// [`task_with`] so listen happens during OnStart.
 ///
-/// If `run` returns `Err` or panics after start has succeeded,
-/// [`crate::Shutdowner::shutdown`] is requested automatically so
-/// [`crate::ModrunBuilder::run`] does not wait forever for a signal.
-/// Returning `Ok(())` (including after [`Stopped`]) does not shut the app down.
+/// If `run` returns `Err` or panics after start has succeeded, shutdown is
+/// requested automatically so [`crate::ModrunBuilder::run`] does not wait
+/// forever for a signal. During start that interrupt is a failure, not a
+/// graceful `Ok(())`. Returning `Ok(())` (including after [`Stopped`]) does
+/// not shut the app down.
 ///
 /// ```
 /// use modrun::{Lifecycle, Modrun, task};

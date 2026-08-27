@@ -515,12 +515,16 @@ fn finish_run(phase: Result<()>, cleanup: Result<()>) -> Result<()> {
 }
 
 /// [`Shutdowner::shutdown`] during build/start is a graceful `Ok(())`.
-/// A background [`crate::task`] failure is not: prefer the unwind join error,
-/// or [`Error::TaskFailedDuringStart`] if unwind reported success.
+/// A background [`crate::task`] failure is not: keep a specific join error,
+/// or [`Error::TaskFailedDuringStart`]. An unwind timeout still retains that
+/// failure as [`Error::CleanupAfterFailure`].
 fn finish_interrupt(shutdown: &Shutdowner, cleanup: Result<()>) -> Result<()> {
     if shutdown.is_failure() {
         match cleanup {
             Ok(()) => Err(Error::TaskFailedDuringStart),
+            Err(e) if matches!(e, Error::UnwindTimeout(_) | Error::StopTimeout(_)) => {
+                Err(with_cleanup(Error::TaskFailedDuringStart, Err(e)))
+            }
             Err(e) => Err(e),
         }
     } else {
@@ -771,5 +775,51 @@ impl Drop for RunningApp {
             #[cfg(debug_assertions)]
             eprintln!("modrun: dropping RunningApp without stop(); OnStop hooks will not run");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finish_interrupt_retains_failure_on_unwind_timeout() {
+        let shutdown = Shutdowner::new();
+        shutdown.fail();
+        let err = finish_interrupt(
+            &shutdown,
+            Err(Error::UnwindTimeout(Duration::from_millis(30))),
+        )
+        .unwrap_err();
+        match err {
+            Error::CleanupAfterFailure { cleanup, earlier } => {
+                assert!(
+                    matches!(*cleanup, Error::UnwindTimeout(_)),
+                    "cleanup was {cleanup}"
+                );
+                assert!(
+                    matches!(*earlier, Error::TaskFailedDuringStart),
+                    "earlier was {earlier}"
+                );
+            }
+            other => panic!("expected CleanupAfterFailure, got {other}"),
+        }
+    }
+
+    #[test]
+    fn finish_interrupt_keeps_join_error() {
+        let shutdown = Shutdowner::new();
+        shutdown.fail();
+        let err = finish_interrupt(&shutdown, Err(Error::hook("died"))).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("died"), "{msg}");
+        assert!(!msg.contains("cleanup failed"), "{msg}");
+    }
+
+    #[test]
+    fn finish_interrupt_graceful_ok_is_ok() {
+        let shutdown = Shutdowner::new();
+        shutdown.shutdown();
+        finish_interrupt(&shutdown, Ok(())).unwrap();
     }
 }

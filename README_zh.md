@@ -201,6 +201,7 @@ Modrun::builder()
 `run()` 把构建或启动阶段的 Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 当成优雅退出：unwind 已经启动的 hook 以及已注册的 stop-only hook，清理成功则返回 `Ok(())`。
 后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 在 start 阶段失败或 panic **不算**优雅退出——`run()` 返回 join 错误（若 unwind 上报成功，则为 `background task failed during start`）。
+若随后 unwind 超时，两者都留在 [`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html) 上。
 若该阶段已经失败，`run()` 仍返回那次失败。
 Shutdown 和 OS 信号与超时一样是协作式的：在下一个 `.await` 才生效，所以同步 OnStart 里调用 `shutdown()` 不会跳过后面尚未让出的 hook。进入 `RUNNING` 之后，`run()` 会等到信号或 `Shutdowner::shutdown()`；后台 [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 失败或 panic 会自动请求 shutdown。用 `tokio::spawn` 自己拉起的任务仍须调用 `shutdown()`，否则会一直等。构造函数、invoker 或 hook 里的 panic 不会变成 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)，并可能跳过生命周期 unwind（tracing 记为 `panicked`）。
 

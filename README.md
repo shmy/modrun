@@ -294,7 +294,9 @@ and any registered stop-only hooks, and returns `Ok(())` if cleanup succeeds.
 A background [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) that
 fails or panics during start is **not** treated as graceful — `run()` returns
 the join error (or `background task failed during start` if unwind reported
-success). If that phase had already failed, `run()` still returns the failure.
+success). If unwind then times out, both are retained on
+[`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html).
+If that phase had already failed, `run()` still returns the failure.
 Shutdown and OS signals are cooperative in the same way as timeouts: they take
 effect at the next `.await`, so a `shutdown()` from a synchronous OnStart does
 not skip later hooks that have not yet yielded. After `RUNNING`, `run()` waits

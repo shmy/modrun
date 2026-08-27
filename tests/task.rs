@@ -215,9 +215,10 @@ async fn task_failure_during_later_start_is_not_ok() {
         "should not wait for the later start hook"
     );
     let msg = err.to_string();
+    assert!(msg.contains("died"), "{msg}");
     assert!(
-        msg.contains("died") || msg.contains("background task failed during start"),
-        "{msg}"
+        !msg.contains("cleanup failed"),
+        "join error should stay the primary error: {msg}"
     );
 }
 

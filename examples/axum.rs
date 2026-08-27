@@ -1,7 +1,8 @@
 //! Axum HTTP server assembled with modrun.
 //!
-//! Start and stop share the server task on the [`Hook`] value, so there is no
-//! need to smuggle channel ends between two closures.
+//! [`modrun::task_with`] binds during OnStart so `AddrInUse` fails start, then
+//! owns the server task so OnStop can shut it down without smuggling channel
+//! ends between two closures.
 //!
 //! ```bash
 //! cargo run --example axum
@@ -15,10 +16,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
-use modrun::{Hook, Lifecycle, Modrun, Module, Result, Shutdowner};
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use modrun::{Lifecycle, Modrun, Module, Shutdowner, task_with};
 
 #[derive(Clone)]
 struct Config {
@@ -53,73 +51,36 @@ async fn hello(State(state): State<AppState>, Path(name): Path<String>) -> Strin
     format!("{}, {name}!\n", state.greeter.prefix)
 }
 
-struct HttpServer {
-    cfg: Config,
-    state: AppState,
-    shutdown: Shutdowner,
-    stop_tx: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<std::io::Result<()>>>,
-}
-
-impl Hook for HttpServer {
-    fn name(&self) -> Option<&'static str> {
-        Some("http.serve")
-    }
-
-    async fn on_start(&mut self) -> Result<()> {
-        let app = Router::new()
-            .route("/", get(index))
-            .route("/hello/{name}", get(hello))
-            .with_state(self.state.clone());
-
-        let addr = self.cfg.addr;
-        let listener = TcpListener::bind(addr).await?;
-        println!("listening on http://{addr}");
-
-        let (stop_tx, stop_rx) = oneshot::channel();
-        let shutdown = self.shutdown.clone();
-        self.task = Some(tokio::spawn(async move {
-            let result = axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = stop_rx.await;
-                })
-                .await;
-            if result.is_err() {
-                // Wake the app so OnStop can surface the server error
-                // instead of waiting forever for an external signal.
-                shutdown.shutdown();
-            }
-            result
-        }));
-        self.stop_tx = Some(stop_tx);
-        Ok(())
-    }
-
-    async fn on_stop(&mut self) -> Result<()> {
-        let _ = self.stop_tx.take().map(|tx| tx.send(()));
-        if let Some(task) = self.task.take() {
-            match task.await {
-                Ok(result) => result?,
-                Err(join) => return Err(modrun::Error::hook(join)),
-            }
-        }
-        Ok(())
-    }
-}
-
 fn register_http(
     lc: Lifecycle,
     cfg: Config,
     state: AppState,
     shutdown: Shutdowner,
 ) -> modrun::Result<()> {
-    lc.append(HttpServer {
-        cfg,
-        state,
-        shutdown,
-        stop_tx: None,
-        task: None,
-    })
+    let addr = cfg.addr;
+    lc.append(task_with(
+        "http.serve",
+        move || async move {
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            println!("listening on http://{addr}");
+            Ok(listener)
+        },
+        move |listener, stopped| async move {
+            let app = Router::new()
+                .route("/", get(index))
+                .route("/hello/{name}", get(hello))
+                .with_state(state);
+            let result = axum::serve(listener, app)
+                .with_graceful_shutdown(stopped)
+                .await;
+            if result.is_err() {
+                // Unblock `run()` so OnStop can surface the server error
+                // instead of waiting forever for an external signal.
+                shutdown.shutdown();
+            }
+            result.map_err(Into::into)
+        },
+    ))
 }
 
 fn http_domain() -> Module {

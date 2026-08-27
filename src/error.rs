@@ -155,6 +155,7 @@ pub enum Error {
 
 /// Several OnStop hook failures aggregated into one error.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct MultipleStopError {
     /// Number of failed hooks.
     pub count: usize,
@@ -162,6 +163,26 @@ pub struct MultipleStopError {
     pub summary: String,
     /// Individual failures in stop order.
     pub errors: Vec<Error>,
+}
+
+impl MultipleStopError {
+    /// Number of failed hooks.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Semicolon-joined displays for easy logging.
+    #[must_use]
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    /// Individual failures in stop order.
+    #[must_use]
+    pub fn errors(&self) -> &[Error] {
+        &self.errors
+    }
 }
 
 impl std::fmt::Display for MultipleStopError {
@@ -320,8 +341,9 @@ mod tests {
         assert!(src.to_string().contains("stop-a"), "source was {src}");
         match &err {
             Error::MultipleStop(inner) => {
-                assert_eq!(inner.errors.len(), 2);
-                assert!(inner.errors[1].to_string().contains("stop-b"));
+                assert_eq!(inner.count(), 2);
+                assert!(inner.summary().contains("stop-a"));
+                assert!(inner.errors()[1].to_string().contains("stop-b"));
             }
             other => panic!("expected MultipleStop, got {other}"),
         }

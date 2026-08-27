@@ -1,7 +1,14 @@
 # modrun
 
+[English](README.md) | [简体中文](README_zh.md)
+
 Lightweight application wiring for Tokio services: register constructors, pull the
 dependency graph, and manage start/stop in one place.
+
+Requires **Rust 1.88** or newer (let-chains). This is not a general-purpose DI
+container: there are no string qualifiers, no request-scoped objects, and no
+`get<T>()` after the graph has been built. Two of the same type use newtypes;
+swap test doubles with [`supply`](#concepts) at the composition root.
 
 If you have written a `main` that builds a config, then a pool, then a repo, then a
 service, then a server — and a shutdown path that has to unwind all of it in the
@@ -83,7 +90,9 @@ continue in dependency order.
 
 **`invoke`** pulls the graph. An invoker's parameters are the roots of what gets
 built, so a type nobody invokes (directly or transitively) is never constructed.
-Invokers run once, during build, and are where you normally register lifecycle hooks.
+A migrator or background consumer that is only `provide`d will stay inert until
+something `invoke`s it (or a type that depends on it). Invokers run once, during
+build, and are where you normally register lifecycle hooks.
 
 **`Lifecycle`** collects start/stop hooks. It is injected automatically, so any
 constructor or invoker can take it as a parameter. OnStart hooks run in registration
@@ -112,13 +121,20 @@ failure stays on [`std::error::Error::source`](std::error::Error::source). `std:
 when you want a context label.
 
 Give hooks a [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
-for logs. Constructors and invokers accept at most eight parameters.
+for logs. Constructors and invokers accept at most eight parameters; group extra
+dependencies in a struct rather than stretching arity.
 
 Hook futures must be cancellation-safe. A start/stop timeout drops the in-progress
-future, but it cannot cancel detached tasks created with `tokio::spawn`; retain a
-handle or cancellation channel and shut those tasks down in OnStop (see the axum
-example). Hook panics are treated as fatal programming errors and may bypass
-lifecycle unwind.
+future, but it cannot cancel detached tasks created with `tokio::spawn`. Prefer
+[`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html) for workers, or
+[`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) when
+bind/listen must finish during OnStart (see the axum example). Both signal
+[`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html) on OnStop,
+join, and abort if the hook is dropped mid-flight. If background work fails
+after start has already succeeded, call
+[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)
+so `run()` does not wait forever for a signal. Hook panics are treated as fatal
+programming errors and may bypass lifecycle unwind.
 
 **`Shutdowner`** is also injected automatically. Calling `shutdown()` unblocks `run()`
 from inside the app, which is how you shut down in response to something other than a
@@ -146,7 +162,21 @@ struct Db(Arc<DbInner>);
 ```
 
 Since the cache key is the type, a type can only be provided once. To wire two of the
-same thing — a primary and a replica pool, say — give each its own newtype.
+same thing — a primary and a replica pool, say — give each its own newtype:
+
+```rust
+# use std::sync::Arc;
+# struct PgPool;
+#[derive(Clone)]
+struct PrimaryDb(Arc<PgPool>);
+#[derive(Clone)]
+struct ReplicaDb(Arc<PgPool>);
+# let _ = std::any::type_name::<(PrimaryDb, ReplicaDb)>();
+```
+
+Connect pools with `provide_result_async` at the composition root (so tests can
+`supply` a fake). Do not open connections inside OnStart unless you want pool
+failure to look like a start-hook failure rather than a constructor error.
 
 ## Modules
 
@@ -190,21 +220,26 @@ not on the root builder.
 Framework events (provide / supply / invoke / construct / OnStart / OnStop) are
 emitted through [`tracing`](https://docs.rs/tracing) with target `modrun`, using
 [uber/fx](https://github.com/uber-go/fx)-style console lines such as
-`[modrun] PROVIDE    my::Type <= my::new`. Call
+`[modrun] PROVIDE    my::Type <= my::new`. The same events carry structured
+fields (`constructor`, `module`, `elapsed_ms`, `error`, …) so a JSON subscriber
+can filter them in production.
+
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
-once at startup (enabled by default via the `logging` feature); without a subscriber
-the events are cheap no-ops:
+is for examples and local binaries (enabled by default via the `logging`
+feature). It is a **no-op** if a subscriber is already installed and will not
+panic. Production services should install their own subscriber and skip this
+helper. Without a subscriber the events are cheap no-ops:
 
 ```rust,no_run
 fn main() {
+    #[cfg(feature = "logging")]
     modrun::logging::init();
 }
 ```
 
-Or set `RUST_LOG=modrun=info` and configure your own subscriber without timestamps
-or tracing metadata. Cancelled hooks and constructors emit `ERROR` lines. A
-successful stop emits `STOPPED`. Leak warnings on `RunningApp` go through tracing;
-debug builds also print to stderr.
+Set `RUST_LOG=modrun=info` with your own subscriber. Cancelled hooks and
+constructors emit `ERROR` lines. A successful stop emits `STOPPED`. Leak
+warnings on `RunningApp` go through tracing; debug builds also print to stderr.
 
 ## Startup banner
 
@@ -222,6 +257,8 @@ Modrun::builder()
 ```
 
 Disable with [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner).
+Use that in production and in tests so the ASCII art does not land in stdout
+next to application logs.
 
 ## Failure modes
 
@@ -242,7 +279,9 @@ on the builder, the last value wins. `no_build_timeout` / `no_start_timeout` /
 `no_stop_timeout` disable the budget. `no_start_timeout` only disables OnStart;
 `stop_timeout` still budgets unwind after a failed or cancelled start. When the
 budget expires, remaining OnStop hooks are abandoned and the timeout is reported
-as an error rather than hanging.
+as an error rather than hanging — connection pools may not get a clean close.
+For production start that runs migrations or cache warm-up, set an explicit
+`start_timeout` (and `stop_timeout`) instead of relying on the 15s default.
 
 `run()` treats Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 during build or start as a graceful stop: it unwinds hooks that already started
@@ -270,6 +309,7 @@ can `stop()` yourself:
 # async fn main() -> modrun::Result<()> {
 let hits = Arc::new(AtomicUsize::new(0));
 let app = Modrun::builder()
+    .no_banner()
     .supply(Hits(Arc::clone(&hits)))
     .invoke(boot)
     .start()
@@ -279,15 +319,84 @@ app.stop().await
 # }
 ```
 
+Replaceable types belong at the composition root (`provide` / `supply`), not
+inside the domain [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html).
+If the module also `provide`s `Repo`, a test `supply(FakeRepo)` will hit
+`already provided`. Runnable version: `cargo run --example swap`.
+
+```rust
+# use modrun::{Modrun, Module};
+# #[derive(Clone)] struct Repo;
+# #[derive(Clone)] struct Service;
+# fn connect_repo() -> Repo { Repo }
+# fn fake_repo() -> Repo { Repo }
+# fn new_service(_: Repo) -> Service { Service }
+# fn boot(_: Service) {}
+fn user_domain() -> Module {
+    Module::new("user")
+        .provide(new_service)
+        .invoke(boot)
+}
+
+# #[tokio::main]
+# async fn main() -> modrun::Result<()> {
+// production
+Modrun::builder()
+    .no_banner()
+    .provide(connect_repo)
+    .module(user_domain())
+    .start()
+    .await?
+    .stop()
+    .await?;
+
+// test: same module, fake at the root
+Modrun::builder()
+    .no_banner()
+    .supply(fake_repo())
+    .module(user_domain())
+    .start()
+    .await?
+    .stop()
+    .await
+# }
+```
+
 Tests that sleep in hooks should set an explicit timeout (or `no_start_timeout`);
 the default budget is 15s. Prefer [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)
-in tests so stdout stays quiet.
+so stdout stays quiet.
+
+## Errors
+
+Graph problems fail before constructors run. Typical `Display` text:
+
+* `type already provided: my::Config`
+* `invoker in module '<root>' needs a dependency nothing provides: my::Db`
+* `provider for my::Svc in module 'user' needs a dependency nothing provides: my::Repo`
+* `dependency cycle detected involving: A -> B -> A`
+* `application start timed out after 15s`
+* `application stop timed out after 15s while unwinding`
+
+Constructor and hook failures keep the original error on
+[`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source).
+Several OnStop failures become [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html).
+If unwind fails after an earlier phase error, both are retained on
+[`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html).
+
+## When not to use this
+
+* Request-scoped objects (one instance per HTTP request)
+* Looking up a type from a live container after `start()`
+* String-named bindings (`"primary"` vs `"replica"`) — use newtypes
+* Runtime-agnostic libraries; modrun targets Tokio
 
 ## Examples
 
 ```bash
-cargo run --example basic   # domain modules, private deps, an async constructor
-cargo run --example axum    # HTTP server with graceful shutdown
+cargo run --example basic    # domain modules, private deps, an async constructor
+cargo run --example worker   # newtype pools + task that selects on Stopped
+cargo run --example swap     # supply a fake at the composition root (tests)
+cargo run --example axum     # HTTP server: task_with binds in OnStart, then serve
 ```
 
 ## License

@@ -49,10 +49,17 @@ type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync
 /// });
 /// ```
 ///
+/// For a background worker, use [`crate::task`]: OnStart spawns the work.
+/// For a server that must bind before the app is running, use
+/// [`crate::task_with`] so listen failures fail start. Call
+/// [`crate::Shutdowner::shutdown`] from `run` if a failure after start should
+/// unblock [`crate::ModrunBuilder::run`].
+///
 /// Hook futures must be cancellation-safe: a timeout drops the in-progress
-/// future. Any task spawned by a hook must be tracked and shut down explicitly.
-/// Panicking is considered a fatal programming error and is not converted into
-/// [`Error`]; in particular, a panic during start may bypass lifecycle unwind.
+/// future. Any task spawned by a hook must be tracked and shut down explicitly
+/// — [`crate::task`] does this for you. Panicking is considered a fatal
+/// programming error and is not converted into [`Error`]; in particular, a
+/// panic during start may bypass lifecycle unwind.
 ///
 /// # Stop-only struct hooks
 ///

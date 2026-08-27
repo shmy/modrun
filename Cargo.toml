@@ -15,6 +15,9 @@ keywords = ["dependency-injection", "lifecycle", "tokio", "async", "wiring"]
 categories = ["asynchronous", "development-tools", "rust-patterns"]
 exclude = [".github", "justfile"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 name = "modrun"
 path = "src/lib.rs"
@@ -30,6 +33,7 @@ signal = ["tokio/signal"]
 [dependencies]
 thiserror = { version = "2", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false, features = [
+    "rt",
     "time",
     "macros",
     "sync",
@@ -78,4 +82,14 @@ required-features = ["logging"]
 [[example]]
 name = "axum"
 path = "examples/axum.rs"
+required-features = ["logging"]
+
+[[example]]
+name = "worker"
+path = "examples/worker.rs"
+required-features = ["logging"]
+
+[[example]]
+name = "swap"
+path = "examples/swap.rs"
 required-features = ["logging"]

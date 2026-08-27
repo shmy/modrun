@@ -121,22 +121,37 @@
 //! [`ModrunBuilder::run`] and [`ModrunBuilder::start`] print a modrun ASCII banner
 //! to stdout before wiring begins (Spring Boot style). Override with
 //! [`.banner(text)`](ModrunBuilder::banner) or disable with
-//! [`.no_banner()`](ModrunBuilder::no_banner).
+//! [`.no_banner()`](ModrunBuilder::no_banner). Production services should call
+//! `.no_banner()` so stdout is not mixed with application logs.
 //!
 //! # Logging
 //!
 //! Framework events (provide / supply / invoke / construct / lifecycle) are
 //! emitted through [`tracing`] with target `modrun`, using [uber/fx](https://github.com/uber-go/fx)-style
-//! console lines such as `[modrun] PROVIDE ...`. Call `modrun::logging::init()`
-//! once at startup (requires the `logging` feature), or configure your own
-//! subscriber without timestamps. Filter with `RUST_LOG=modrun=info`. Without a
-//! subscriber the events are cheap no-ops. Debug builds also print to stderr if
-//! a `RunningApp` is dropped without [`RunningApp::stop`].
+//! console lines such as `[modrun] PROVIDE ...`. Events also carry structured
+//! fields (`constructor`, `module`, `elapsed_ms`, …) for JSON subscribers.
+//! Call `modrun::logging::init()` from examples and local binaries
+//! (requires the `logging` feature); it is a no-op if a subscriber is already
+//! installed. Production processes should install their own subscriber and
+//! filter with `RUST_LOG=modrun=info`. Without a subscriber the events are
+//! cheap no-ops. Debug builds also print to stderr if a `RunningApp` is dropped
+//! without [`RunningApp::stop`].
 //!
 //! ```no_run
 //! # #[cfg(feature = "logging")]
 //! modrun::logging::init();
 //! ```
+//!
+//! # Stability
+//!
+//! The public model is type-keyed singletons, lazy `provide`, `invoke` as the
+//! graph root, and start/stop via [`Lifecycle`]. There are no string qualifiers
+//! and no service locator after build. [`Hook`] methods will only grow with
+//! defaults. Constructors and invokers accept at most eight parameters; group
+//! extra deps in a struct. MSRV is **1.88** (let-chains).
+//!
+//! Application code should use [`ModrunBuilder::provide`] /
+//! [`ModrunBuilder::invoke`], not the [`ProviderFn`] marker types.
 //!
 //! # Crate features
 //!
@@ -146,8 +161,8 @@
 //!   feature is a no-op for OS signals; use [`Shutdowner`]. Disable with
 //!   `default-features = false` when you only call [`ModrunBuilder::start`] or
 //!   wait on [`Shutdowner`] yourself.
-//! * **`logging`** — `modrun::logging::init()` helper that installs a minimal
-//!   tracing subscriber for fx-style console output.
+//! * **`logging`** — `modrun::logging::init` / `try_init` for fx-style console
+//!   output. Skip it in production and install your own subscriber.
 
 #![forbid(unsafe_code)]
 
@@ -165,6 +180,7 @@ mod provide;
 mod scope;
 mod shutdown;
 mod supply;
+mod task;
 mod timeout;
 mod trace;
 mod wiring;
@@ -175,14 +191,16 @@ pub use error::{BoxError, Error, MultipleStopError, Result};
 pub use lifecycle::{Hook, HookFn, Lifecycle, hook};
 pub use module::Module;
 pub use shutdown::Shutdowner;
+pub use task::{PreparedTask, Stopped, Task, task, task_with};
 pub use timeout::DEFAULT_TIMEOUT;
 
 #[cfg(feature = "logging")]
 pub mod logging;
 
 /// Constructor and invoker bounds, for code that wraps modrun's wiring API.
-/// Convert with [`ProviderFn::into_provider`] / [`InvokeFn::into_invoke`], then
-/// register with [`ModrunBuilder::provide_dyn`] / [`ModrunBuilder::invoke_dyn`].
+/// Application code should not name the marker types; convert with
+/// [`ProviderFn::into_provider`] / [`InvokeFn::into_invoke`], then register with
+/// [`ModrunBuilder::provide_dyn`] / [`ModrunBuilder::invoke_dyn`].
 pub use invoke::{AsyncInvokeFn, DynInvoker, InvokeFn};
 pub use provide::{
     AsyncProviderFn, DynProvider, FallibleAsyncProviderFn, FallibleProviderFn, ProviderFn,

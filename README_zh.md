@@ -1,0 +1,313 @@
+# modrun
+
+[English](README.md) | 简体中文
+
+面向 Tokio 服务的轻量装配层：注册构造函数、拉取依赖图，并在一处管理启动/停止。
+
+需要 **Rust 1.88** 或更高版本（let-chains）。这不是通用 DI 容器：没有字符串 qualifier、没有请求级对象，图构建完成之后也不能 `get<T>()`。两个同类依赖用 newtype 区分；测试替身在组合根用 [`supply`](#概念) 替换。
+
+如果你写过这样的 `main`——先造 config，再造连接池，再造 repo，再造 service，再造 server，停机时还得按相反顺序拆掉——modrun 就是把这段 `main` 写一次。
+
+```rust,no_run
+use modrun::{Hook, Lifecycle, Modrun};
+
+#[derive(Clone)]
+struct Config {
+    port: u16,
+}
+
+#[derive(Clone)]
+struct Server {
+    cfg: Config,
+}
+
+impl Hook for Server {
+    async fn on_start(&mut self) -> modrun::Result<()> {
+        println!("listening on {}", self.cfg.port);
+        Ok(())
+    }
+
+    async fn on_stop(&mut self) -> modrun::Result<()> {
+        println!("goodbye");
+        Ok(())
+    }
+}
+
+fn new_config() -> Config {
+    Config { port: 8080 }
+}
+
+fn new_server(cfg: Config) -> Server {
+    Server { cfg }
+}
+
+fn boot(lc: Lifecycle, server: Server) -> modrun::Result<()> {
+    lc.append(server)
+}
+
+#[tokio::main]
+async fn main() -> modrun::Result<()> {
+    Modrun::builder()
+        .provide(new_config)
+        .provide(new_server)
+        .invoke(boot)
+        .run()
+        .await
+}
+```
+
+`run()` 会构建依赖图、按序跑完所有 OnStart、等待操作系统信号或
+[`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)，再按相反顺序跑 OnStop。
+默认开启 `signal` feature 时，监听器在 `run()` 一开始就安装：**Unix** 上是 Ctrl-C / SIGTERM，**Windows** 上是 Ctrl-C / Ctrl-Break / Ctrl-Close / Ctrl-Shutdown；其他目标上只有
+[`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
+能解开 `run()`。构建或启动阶段收到停机请求会取消当前阶段，并 unwind 已经启动过的 hook，以及已经注册的 stop-only hook（即使 OnStart 从未跑过）。超时或 hook 失败仍返回错误；并发的 shutdown 不会把失败变成 `Ok(())`。
+如果只用 `start()`，或自己在 [`Shutdowner::wait`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.wait) 上等待，可以关掉默认的 `signal` feature。
+
+## 概念
+
+**`provide`** 注册构造函数。没有人要这个类型之前不会构造，每种类型最多构造一次。返回 `Result<T, E>` 的构造函数必须用 `provide_result`（或 `provide_result_async`）；交给普通 `provide` 是编译错误。`provide_async` 和 `provide_result_async` 接受 `async fn`。
+若干彼此独立的构造函数需要同时出现时，modrun 按 DAG 层构建：**同一层的 async** 构造函数在一个任务上并发 poll；**sync** 构造函数在 `construct()` 里跑完，并推迟该层后续 future 的创建。共享依赖仍然先跑，再按依赖顺序继续。
+
+**`supply`** 把已经有的值交给容器，跳过构造函数。
+
+**`invoke`** 拉取依赖图。invoker 的参数是构建的根：没有人直接或间接 invoke 的类型永远不会被构造。
+只 `provide`、没有被 invoke 到的迁移任务或后台消费者会一直不跑，直到有东西 `invoke` 它（或依赖它的类型）。Invoker 在 build 期间只跑一次，通常也是注册生命周期 hook 的地方。
+
+**`Lifecycle`** 收集 start/stop hook。它会自动注入，任何构造函数或 invoker 都可以把它当参数。OnStart 按注册顺序执行；OnStop 按相反顺序。某个 start hook 失败或 start 被取消时，已经跑完 OnStart 的 hook 会先被 stop，再把错误向上传——OnStop 的失败会留在返回的错误里。正在失败或被取消的那个 start hook **不会**跑自己的 OnStop。没有 OnStart 的 stop-only hook 一经注册就视为已激活，会参与 unwind。
+在 `invoke` 里（或 OnStart 工厂里）注册 hook；start 已经结束或 stop 已经开始时，`append` 会返回错误。Invoker 本身可以返回 `modrun::Result<()>`，所以给 `boot` 这个返回类型，把 `append` 的结果直接往回传，而不要 `unwrap`。
+start 和 stop 共享状态（`&mut self`）时，在结构体上实现 [`Hook`](https://docs.rs/modrun/latest/modrun/trait.Hook.html)。只实现 OnStop 的结构体要覆盖 [`has_start`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.has_start)
+为 `false`，这样失败 start 之后的 trailing activation 仍会跑它。
+一次性闭包用 [`hook()`](https://docs.rs/modrun/latest/modrun/fn.hook.html)；捕获共享状态的 OnStop 回调必须可重复调用（`Fn`）——每次调用时在闭包里 clone 一份 [`Arc`](std::sync::Arc)。
+Hook 和构造函数错误使用 [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html)（`thiserror`）；hook 应返回
+[`Error::hook`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.hook) 或
+[`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)，这样原始失败会留在 [`std::error::Error::source`](std::error::Error::source) 上。`std::io::Error` 可以通过 [`From`](std::convert::From) 转换，所以 hook 里 `listener.bind().await?` 能用；需要上下文标签时优先 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)。
+
+给 hook 一个 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+用于日志。构造函数和 invoker 最多八个参数；多出来的依赖收进一个结构体，不要把参数个数拉长。
+
+Hook 的 future 必须是 cancellation-safe 的。start/stop 超时会 drop 正在进行的 future，但 **不能** 取消 `tokio::spawn` 出去的脱离任务。Worker 用 [`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html)；bind/listen 必须在 OnStart 里完成时用 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html)（见 axum 示例）。两者都会在 OnStop 时打出 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html)、join，并在 hook 中途被 drop 时 abort。若后台工作在 start 已经成功之后失败，调用
+[`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)，
+否则 `run()` 会一直等信号。Hook 里 panic 视为致命的编程错误，可能跳过生命周期 unwind。
+
+**`Shutdowner`** 同样自动注入。在应用内部调用 `shutdown()` 会解开 `run()`，用来响应信号以外的停机原因。
+
+容器在 build 结束时被 drop。单例只通过你在 hook 里捕获的值（或 invoke 时拿走的其他 `Clone` 句柄）活下来。modrun 负责启动装配，不是活的 service locator。Build 不是事务：后面的 invoker 失败时，前面的构造函数可能已经产生了副作用。
+
+按值注入要求依赖 `Clone`，因为单例按类型缓存，注入时 clone。类型很大、被很多构造函数共享、或会被注入多次时，优先 `Arc<T>`——`Arc<T>` 会登记为别名，返回 `T` 的构造函数也可以注入 `Arc<T>`，此时不要求 `T: Clone`。可变共享状态放在类型内部的 `Arc` 后面：
+
+```rust
+use std::sync::Arc;
+
+struct DbInner;
+
+#[derive(Clone)]
+struct Db(Arc<DbInner>);
+```
+
+缓存键是类型，所以一种类型只能 provide 一次。要装配两份同类的东西（例如主库和从库连接池），各自包一层 newtype：
+
+```rust
+# use std::sync::Arc;
+# struct PgPool;
+#[derive(Clone)]
+struct PrimaryDb(Arc<PgPool>);
+#[derive(Clone)]
+struct ReplicaDb(Arc<PgPool>);
+# let _ = std::any::type_name::<(PrimaryDb, ReplicaDb)>();
+```
+
+连接池用 `provide_result_async` 放在组合根（这样测试才能 `supply` 假实现）。不要在 OnStart 里建连，除非你希望连接失败看起来像 start-hook 失败，而不是构造函数错误。
+
+## 模块
+
+`Module` 把相关装配收在一个名字下，并给出私有作用域。
+`provide_private` 让类型在模块外不可见，两个领域就可以各自有一份 `Repo` 而不冲突：
+
+```rust
+use modrun::{Modrun, Module};
+
+# #[derive(Clone)] struct UserRepo;
+# #[derive(Clone)] struct UserService;
+# fn new_user_repo() -> UserRepo { UserRepo }
+# fn new_user_service(_r: UserRepo) -> UserService { UserService }
+# fn boot_user(_s: UserService) {}
+fn user_domain() -> Module {
+    Module::new("user")
+        .provide_private(new_user_repo)
+        .provide(new_user_service)
+        .invoke(boot_user)
+}
+
+# #[tokio::main]
+# async fn main() -> modrun::Result<()> {
+Modrun::builder()
+    .module(user_domain())
+    .start()
+    .await?
+    .stop()
+    .await
+# }
+```
+
+私有类型对声明它的模块及其嵌套模块可见。
+用普通 `provide` / `supply` 注册的类型在任何地方都可见，不论在哪声明。
+`provide_private` / `supply_private` 只存在于 [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上，根 builder 没有。
+
+## 日志
+
+框架事件（provide / supply / invoke / construct / OnStart / OnStop）通过 [`tracing`](https://docs.rs/tracing) 发出，target 为 `modrun`，控制台行是 [uber/fx](https://github.com/uber-go/fx) 风格，例如
+`[modrun] PROVIDE    my::Type <= my::new`。同一批事件还带结构化字段（`constructor`、`module`、`elapsed_ms`、`error` 等），生产环境的 JSON subscriber 可以按字段过滤。
+
+[`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
+给示例和本地二进制用（默认 feature `logging`）。如果已经安装了 subscriber，它是 **no-op**，不会 panic。生产服务应自己装 subscriber，跳过这个助手。没有 subscriber 时，这些事件是廉价空操作：
+
+```rust,no_run
+fn main() {
+    #[cfg(feature = "logging")]
+    modrun::logging::init();
+}
+```
+
+自带 subscriber 时设 `RUST_LOG=modrun=info`。被取消的 hook 和构造函数打 `ERROR`。成功 stop 打 `STOPPED`。`RunningApp` 泄漏警告走 tracing；debug 构建还会打到 stderr。
+
+## 启动 Banner
+
+[`ModrunBuilder::run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run) 和
+[`start`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.start) 在装配开始前会往 stdout 打一份 modrun ASCII banner（Spring Boot 风格）。自定义文本（或在自己的 crate 里 `include_str!("banner.txt")`）：
+
+```rust,no_run
+# use modrun::Modrun;
+Modrun::builder()
+    .banner("my service")
+    // ...
+# ;
+```
+
+用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner) 关掉。
+生产和测试里请关掉，避免 ASCII 画和业务日志混在 stdout。
+
+## 失败模式
+
+图会在任何东西被构造之前检查，所以这些是构建期错误，而不是跑到一半才发现：
+
+* 某个 provider 依赖了没有任何东西提供的类型，即使没人用这个 provider
+* 依赖环
+* 同一类型提供了两次
+
+运行时，`build_timeout`、`start_timeout`、`stop_timeout`（默认 15s）分别限制图构建、OnStart、OnStop。超时是协作式的：在 `.await` 上让出的工作会在预算耗尽时被取消。
+同步阻塞（例如 sync invoker、构造函数或 hook 里的 `std::thread::sleep`）无法被抢占，但超时后的成功仍会报成超时错误而不是 `Ok`。同一项超时设多次，以最后一次为准。`no_build_timeout` / `no_start_timeout` / `no_stop_timeout` 关掉预算。`no_start_timeout` 只关掉 OnStart；失败或取消的 start 之后的 unwind 仍受 `stop_timeout` 限制。预算耗尽时，剩余 OnStop 会被放弃，并以错误上报而不是挂死——连接池可能来不及干净关闭。
+生产启动若要跑迁移或预热缓存，请显式设置 `start_timeout`（以及 `stop_timeout`），不要依赖默认的 15s。
+
+`run()` 把构建或启动阶段的 Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
+当成优雅退出：unwind 已经启动的 hook 以及已注册的 stop-only hook，清理成功则返回 `Ok(())`。
+若该阶段已经失败，`run()` 仍返回那次失败。
+
+## 测试
+
+`start()` 构建并启动，不等待信号，返回一个你可以自己 `stop()` 的 `RunningApp`：
+
+```rust
+# use std::sync::Arc;
+# use std::sync::atomic::{AtomicUsize, Ordering};
+# use modrun::{hook, Lifecycle, Modrun};
+# #[derive(Clone)] struct Hits(Arc<AtomicUsize>);
+# fn boot(lc: Lifecycle, hits: Hits) {
+#     let n = Arc::clone(&hits.0);
+#     lc.append(hook().on_start(move || async move {
+#         n.fetch_add(1, Ordering::SeqCst);
+#         Ok(())
+#     })).unwrap();
+# }
+# #[tokio::main]
+# async fn main() -> modrun::Result<()> {
+let hits = Arc::new(AtomicUsize::new(0));
+let app = Modrun::builder()
+    .no_banner()
+    .supply(Hits(Arc::clone(&hits)))
+    .invoke(boot)
+    .start()
+    .await?;
+assert_eq!(hits.load(Ordering::SeqCst), 1);
+app.stop().await
+# }
+```
+
+可替换的类型放在组合根（`provide` / `supply`），不要放进领域 [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 里。
+如果模块自己也 `provide` 了 `Repo`，测试里 `supply(FakeRepo)` 会碰到 `already provided`。可运行示例：`cargo run --example swap`。
+
+```rust
+# use modrun::{Modrun, Module};
+# #[derive(Clone)] struct Repo;
+# #[derive(Clone)] struct Service;
+# fn connect_repo() -> Repo { Repo }
+# fn fake_repo() -> Repo { Repo }
+# fn new_service(_: Repo) -> Service { Service }
+# fn boot(_: Service) {}
+fn user_domain() -> Module {
+    Module::new("user")
+        .provide(new_service)
+        .invoke(boot)
+}
+
+# #[tokio::main]
+# async fn main() -> modrun::Result<()> {
+// 生产
+Modrun::builder()
+    .no_banner()
+    .provide(connect_repo)
+    .module(user_domain())
+    .start()
+    .await?
+    .stop()
+    .await?;
+
+// 测试：同一个模块，在根上供给假实现
+Modrun::builder()
+    .no_banner()
+    .supply(fake_repo())
+    .module(user_domain())
+    .start()
+    .await?
+    .stop()
+    .await
+# }
+```
+
+hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默认预算是 15s。测试里请用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)，避免 stdout 被 banner 弄乱。
+
+## 错误
+
+图的问题在构造函数运行之前失败。常见的 `Display` 文本：
+
+* `type already provided: my::Config`
+* `invoker in module '<root>' needs a dependency nothing provides: my::Db`
+* `provider for my::Svc in module 'user' needs a dependency nothing provides: my::Repo`
+* `dependency cycle detected involving: A -> B -> A`
+* `application start timed out after 15s`
+* `application stop timed out after 15s while unwinding`
+
+构造函数和 hook 失败会把原始错误留在
+[`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source)。
+多个 OnStop 失败会聚合成 [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html)。
+若更早阶段已经失败、unwind 又失败，两者都保留在
+[`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html) 上。
+
+## 什么时候不该用
+
+* 请求级对象（每个 HTTP 请求一份）
+* `start()` 之后还想从活的容器里查找类型
+* 字符串命名绑定（`"primary"` vs `"replica"`）——用 newtype
+* 与运行时无关的库；modrun 面向 Tokio
+
+## 示例
+
+```bash
+cargo run --example basic    # 领域模块、私有依赖、async 构造函数
+cargo run --example worker   # newtype 连接池 + 在 Stopped 上 select 的 task
+cargo run --example swap     # 在组合根 supply 假实现（测试）
+cargo run --example axum     # HTTP 服务：task_with 在 OnStart 里 bind，再 serve
+```
+
+## License
+
+MIT

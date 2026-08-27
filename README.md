@@ -5,7 +5,7 @@
 Lightweight application wiring for Tokio services: register constructors, pull the
 dependency graph, and manage start/stop in one place.
 
-Requires **Rust 1.88** or newer (let-chains). This is not a general-purpose DI
+Requires **Rust 1.85** or newer (edition 2024). This is not a general-purpose DI
 container: there are no string qualifiers, no request-scoped objects, and no
 `get<T>()` after the graph has been built. Two of the same type use newtypes;
 swap test doubles with [`supply`](#concepts) at the composition root.

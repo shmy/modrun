@@ -148,7 +148,7 @@
 //! graph root, and start/stop via [`Lifecycle`]. There are no string qualifiers
 //! and no service locator after build. [`Hook`] methods will only grow with
 //! defaults. Constructors and invokers accept at most eight parameters; group
-//! extra deps in a struct. MSRV is **1.88** (let-chains).
+//! extra deps in a struct. MSRV is **1.85** (edition 2024).
 //!
 //! Application code should use [`ModrunBuilder::provide`] /
 //! [`ModrunBuilder::invoke`], not the [`ProviderFn`] marker types.

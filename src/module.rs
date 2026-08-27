@@ -52,7 +52,7 @@ impl std::fmt::Debug for Module {
 }
 
 impl Module {
-    /// An empty module. `name` appears in wiring error messages.
+    /// An empty module. `name` should be unique; it is used only in diagnostics.
     #[must_use]
     pub fn new(name: &'static str) -> Self {
         Self {

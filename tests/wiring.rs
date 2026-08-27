@@ -370,3 +370,89 @@ async fn provide_mut_and_invoke_async() {
     b.invoke_async_mut(check);
     b.start().await.unwrap().stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn three_node_cycle_is_reported() {
+    #[derive(Clone)]
+    struct NodeA;
+    #[derive(Clone)]
+    struct NodeB;
+    #[derive(Clone)]
+    struct NodeC;
+
+    fn new_a(_b: NodeB) -> NodeA {
+        NodeA
+    }
+    fn new_b(_c: NodeC) -> NodeB {
+        NodeB
+    }
+    fn new_c(_a: NodeA) -> NodeC {
+        NodeC
+    }
+    fn use_a(_a: NodeA) {}
+
+    let err = Modrun::builder()
+        .provide(new_a)
+        .provide(new_b)
+        .provide(new_c)
+        .invoke(use_a)
+        .start()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("cycle"), "unexpected: {msg}");
+    assert!(msg.contains("->"), "unexpected: {msg}");
+    assert!(
+        msg.contains("NodeA") && msg.contains("NodeB") && msg.contains("NodeC"),
+        "unexpected: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn eight_parameter_provide_and_invoke() {
+    #[derive(Clone)]
+    struct P1(u8);
+    #[derive(Clone)]
+    struct P2(u8);
+    #[derive(Clone)]
+    struct P3(u8);
+    #[derive(Clone)]
+    struct P4(u8);
+    #[derive(Clone)]
+    struct P5(u8);
+    #[derive(Clone)]
+    struct P6(u8);
+    #[derive(Clone)]
+    struct P7(u8);
+    #[derive(Clone)]
+    struct P8(u8);
+    #[derive(Clone)]
+    struct Eight(u8);
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_eight(p1: P1, p2: P2, p3: P3, p4: P4, p5: P5, p6: P6, p7: P7, p8: P8) -> Eight {
+        Eight(p1.0 + p2.0 + p3.0 + p4.0 + p5.0 + p6.0 + p7.0 + p8.0)
+    }
+
+    fn boot(eight: Eight) {
+        assert_eq!(eight.0, 36);
+    }
+
+    Modrun::builder()
+        .supply(P1(1))
+        .supply(P2(2))
+        .supply(P3(3))
+        .supply(P4(4))
+        .supply(P5(5))
+        .supply(P6(6))
+        .supply(P7(7))
+        .supply(P8(8))
+        .provide(new_eight)
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
+}

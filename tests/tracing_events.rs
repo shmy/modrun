@@ -2,8 +2,9 @@
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use modrun::{Lifecycle, Modrun, Module, hook};
+use modrun::{Lifecycle, Modrun, Module, Shutdowner, hook};
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -200,4 +201,59 @@ async fn named_hook_appears_in_logs() {
     .await;
 
     assert!(logs.contains("http.serve"), "{logs}");
+}
+
+#[tokio::test]
+async fn build_cancel_emits_shutdown_requested() {
+    #[derive(Clone)]
+    struct Pool;
+
+    async fn connect(shutdown: Shutdowner) -> Pool {
+        let s = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            s.shutdown();
+        });
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Pool
+    }
+
+    let logs = with_logs(|| async {
+        Modrun::builder()
+            .provide_async(connect)
+            .invoke(|_p: Pool| {})
+            .run()
+            .await
+            .unwrap();
+    })
+    .await;
+
+    assert!(has_message(&logs, "shutdown requested"), "{logs}");
+}
+
+#[tokio::test]
+async fn stop_timeout_emits_hooks_abandoned() {
+    fn boot(lc: Lifecycle) {
+        lc.append(hook().on_stop(|| async {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            Ok(())
+        }))
+        .unwrap();
+        lc.append(hook().on_stop(|| async { Ok(()) })).unwrap();
+    }
+
+    let logs = with_logs(|| async {
+        let _ = Modrun::builder()
+            .stop_timeout(std::time::Duration::from_millis(50))
+            .invoke(boot)
+            .start()
+            .await
+            .unwrap()
+            .stop()
+            .await
+            .unwrap_err();
+    })
+    .await;
+
+    assert!(has_message(&logs, "OnStop hooks abandoned"), "{logs}");
 }

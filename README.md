@@ -58,19 +58,24 @@ async fn main() -> modrun::Result<()> {
 `run()` builds the graph, runs every OnStart hook, waits for Ctrl-C, SIGTERM, or
 [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html), then runs every OnStop hook in reverse. Signal
 handlers are installed at the start of `run()`, so a shutdown request during
-build or start cancels that phase and unwinds any hooks that already started.
+build or start cancels that phase and unwinds hooks that already started, plus
+any stop-only hooks already registered (even if OnStart never ran). A timeout or
+hook failure still returns an error; a concurrent shutdown does not turn that
+into `Ok(())`.
 Disable the default `signal` feature if you only use `start()` or wait on
 [`Shutdowner::wait`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.wait) yourself.
 
 ## Concepts
 
 **`provide`** registers a constructor. Nothing is built until something asks for it,
-and each type is built at most once. `provide_result` takes a constructor returning
-`Result<T, E>`; `provide_async` and `provide_result_async` take `async fn`s. When
-several independent constructors are needed at once, modrun builds them
-concurrently by DAG layer (shared dependencies still run first), then continues
-in dependency order. That last pair is what you want for connection pools and
-clients that handshake on creation.
+and each type is built at most once. Constructors that return `Result<T, E>` must
+use `provide_result` (or `provide_result_async`) — plain `provide` registers the
+`Result` type itself. `provide_async` and `provide_result_async` take `async fn`s.
+When several independent constructors are needed at once, modrun builds them by
+DAG layer: **async** constructors in the same layer are polled concurrently on one
+task; **sync** constructors run inside `construct()` and defer creation of later
+futures in that layer. Shared dependencies still run first, then dependents
+continue in dependency order.
 
 **`supply`** hands the container a value you already have, skipping the constructor.
 
@@ -88,14 +93,18 @@ without OnStart) is considered active immediately and is included in unwind.
 Register hooks during `invoke` (or from an OnStart factory);
 `append` returns an error if start has already finished or stop has begun.
 Implement [`Hook`](https://docs.rs/modrun/latest/modrun/trait.Hook.html) on a
-struct when start and stop share state (`&mut self`). For one-off closures, use
-[`hook()`](https://docs.rs/modrun/latest/modrun/fn.hook.html); those callbacks
-are `FnOnce` and may consume what they capture. Hook and constructor
+struct when start and stop share state (`&mut self`). For a struct that only
+implements OnStop, override [`has_start`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.has_start)
+to return `false` so trailing activation still runs it after a failed start.
+For one-off closures, use
+[`hook()`](https://docs.rs/modrun/latest/modrun/fn.hook.html); OnStop callbacks
+must be repeatable (`Fn`) when they capture shared state — clone an [`Arc`](std::sync::Arc)
+inside the closure on each call. Hook and constructor
 errors use [`Error`](https://docs.rs/modrun/latest/modrun/enum.Error.html) (`thiserror`); hooks should return
 [`Error::hook`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.hook) or
 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) so the original
-failure stays on \[`std::error::Error::source`]. `std::io::Error` converts with
-\[`From`], so `listener.bind().await?` works inside a hook; prefer \[`Error::io`]
+failure stays on [`std::error::Error::source`](std::error::Error::source). `std::io::Error` converts with
+[`From`](std::convert::From), so `listener.bind().await?` works inside a hook; prefer [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)
 when you want a context label.
 
 Give hooks a [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
@@ -230,7 +239,8 @@ rather than hanging.
 
 `run()` treats Ctrl-C / SIGTERM / [`Shutdowner`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html)
 during build or start as a graceful stop: it unwinds hooks that already started
-and returns `Ok(())` if cleanup succeeds.
+and any registered stop-only hooks, and returns `Ok(())` if cleanup succeeds.
+If that phase had already failed, `run()` still returns the failure.
 
 ## Testing
 
@@ -263,7 +273,8 @@ app.stop().await
 ```
 
 Tests that sleep in hooks should set an explicit timeout (or `no_start_timeout`);
-the default budget is 15s.
+the default budget is 15s. Prefer [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)
+in tests so stdout stays quiet.
 
 ## Examples
 

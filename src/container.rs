@@ -218,9 +218,10 @@ impl Container {
 
     /// Ensure every root type (and its transitive unbuilt providers) is constructed.
     ///
-    /// Independent providers in the same DAG layer are constructed concurrently:
-    /// dependencies are injected synchronously, then their owned futures are
-    /// joined on this task before the next layer runs.
+    /// **Async** constructors in the same DAG layer are polled concurrently on this
+    /// task. **Sync** constructors run inside [`Provider::construct`](Provider::construct)
+    /// while the wave is being assembled, which defers creation of later futures
+    /// in the same layer.
     pub(crate) async fn ensure_built(&mut self, roots: &[(TypeId, &'static str)]) -> Result<()> {
         let from = self.active_scope;
         let mut pending = HashSet::new();
@@ -601,6 +602,8 @@ async fn run_construct(
 }
 
 fn downcast_clone<T: Clone + Send + Sync + 'static>(value: &DynAny) -> Result<T> {
+    // `DynAny` is only constructed by `pack`; a failed downcast means an internal
+    // invariant broke — there is no supported way for callers to forge a bad value.
     value
         .downcast_ref::<T>()
         .cloned()

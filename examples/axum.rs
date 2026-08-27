@@ -97,10 +97,11 @@ impl Hook for HttpServer {
 
     async fn on_stop(&mut self) -> Result<()> {
         let _ = self.stop_tx.take().map(|tx| tx.send(()));
-        if let Some(task) = self.task.take()
-            && let Ok(result) = task.await
-        {
-            result?;
+        if let Some(task) = self.task.take() {
+            match task.await {
+                Ok(result) => result?,
+                Err(join) => return Err(modrun::Error::hook(join)),
+            }
         }
         Ok(())
     }

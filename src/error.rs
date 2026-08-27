@@ -92,14 +92,6 @@ pub enum Error {
     #[error("cannot append lifecycle hook while stopping")]
     AppendWhileStopping,
 
-    /// Shutdown arrived during build.
-    #[error("shutdown requested during build")]
-    ShutdownDuringBuild,
-
-    /// Shutdown arrived during start.
-    #[error("shutdown requested during start")]
-    ShutdownDuringStart,
-
     /// Graph construction exceeded its budget.
     #[error("application build timed out after {0:?}")]
     BuildTimeout(std::time::Duration),
@@ -128,21 +120,15 @@ pub enum Error {
     #[error("failed to listen for process signal: {0}")]
     SignalListen(#[source] std::io::Error),
 
-    /// Several OnStop hooks failed; see [`errors`](Self::MultipleStop::errors).
-    #[error("{count} OnStop hooks failed: {summary}")]
-    MultipleStop {
-        /// Number of failed hooks.
-        count: usize,
-        /// Semicolon-joined displays for easy logging.
-        summary: String,
-        /// Individual failures in stop order.
-        errors: Vec<Error>,
-    },
+    /// Several OnStop hooks failed; see [`MultipleStopError::errors`].
+    #[error(transparent)]
+    MultipleStop(MultipleStopError),
 
     /// Cleanup failed after an earlier phase error; both are retained.
     #[error("cleanup failed after an earlier phase error: {cleanup}; earlier: {earlier}")]
     CleanupAfterFailure {
         /// Error from stop/unwind.
+        #[source]
         cleanup: Box<Error>,
         /// Error from the earlier phase.
         earlier: Box<Error>,
@@ -151,7 +137,7 @@ pub enum Error {
     /// An application hook returned this failure.
     ///
     /// Prefer [`Error::hook`] rather than constructing this variant directly.
-    #[error("{0}")]
+    #[error("hook failed: {0}")]
     Hook(#[source] BoxError),
 
     /// I/O failure with a short context label (e.g. bind / serve).
@@ -165,6 +151,31 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// Several OnStop hook failures aggregated into one error.
+#[derive(Debug)]
+pub struct MultipleStopError {
+    /// Number of failed hooks.
+    pub count: usize,
+    /// Semicolon-joined displays for easy logging.
+    pub summary: String,
+    /// Individual failures in stop order.
+    pub errors: Vec<Error>,
+}
+
+impl std::fmt::Display for MultipleStopError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} OnStop hooks failed: {}", self.count, self.summary)
+    }
+}
+
+impl std::error::Error for MultipleStopError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.errors
+            .first()
+            .map(|e| e as &(dyn std::error::Error + 'static))
+    }
 }
 
 impl Error {
@@ -202,11 +213,11 @@ impl Error {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        Self::MultipleStop {
+        Self::MultipleStop(MultipleStopError {
             count,
             summary,
             errors,
-        }
+        })
     }
 }
 
@@ -290,5 +301,37 @@ mod tests {
             Error::Io { context, .. } => assert_eq!(context, "io"),
             other => panic!("expected Io, got {other}"),
         }
+    }
+
+    #[test]
+    fn cleanup_after_failure_source_is_cleanup() {
+        let err = Error::CleanupAfterFailure {
+            cleanup: Box::new(Error::hook("cleanup")),
+            earlier: Box::new(Error::hook("earlier")),
+        };
+        let src = StdError::source(&err).expect("source");
+        assert!(src.to_string().contains("cleanup"), "source was {src}");
+    }
+
+    #[test]
+    fn multiple_stop_source_is_first_error() {
+        let err = Error::multiple_stop(vec![Error::hook("stop-a"), Error::hook("stop-b")]);
+        let src = StdError::source(&err).expect("source");
+        assert!(src.to_string().contains("stop-a"), "source was {src}");
+        match &err {
+            Error::MultipleStop(inner) => {
+                assert_eq!(inner.errors.len(), 2);
+                assert!(inner.errors[1].to_string().contains("stop-b"));
+            }
+            other => panic!("expected MultipleStop, got {other}"),
+        }
+    }
+
+    #[test]
+    fn hook_display_includes_context() {
+        let err = Error::hook("boom");
+        let msg = err.to_string();
+        assert!(msg.contains("boom"), "unexpected: {msg}");
+        assert!(msg.contains("hook failed"), "unexpected: {msg}");
     }
 }

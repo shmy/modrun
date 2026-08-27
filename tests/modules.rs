@@ -236,3 +236,62 @@ async fn same_scope_public_can_decorate_private() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn nested_child_uses_parent_private_provider() {
+    #[derive(Clone)]
+    struct ParentSecret;
+    #[derive(Clone)]
+    struct ChildSvc;
+
+    fn new_parent_secret() -> ParentSecret {
+        ParentSecret
+    }
+    fn new_child_svc(_secret: ParentSecret) -> ChildSvc {
+        ChildSvc
+    }
+    fn boot_child(_svc: ChildSvc) {}
+
+    Modrun::builder()
+        .module(
+            Module::new("parent")
+                .provide_private(new_parent_secret)
+                .module(
+                    Module::new("child")
+                        .provide(new_child_svc)
+                        .invoke(boot_child),
+                ),
+        )
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn parent_invoke_cannot_use_child_private_provider() {
+    #[derive(Clone)]
+    struct ChildSecret;
+
+    fn new_child_secret() -> ChildSecret {
+        ChildSecret
+    }
+    fn needs_secret(_secret: ChildSecret) {}
+
+    let err = Modrun::builder()
+        .module(
+            Module::new("parent")
+                .module(Module::new("child").provide_private(new_child_secret))
+                .invoke(needs_secret),
+        )
+        .start()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("missing") || msg.contains("ChildSecret"),
+        "unexpected: {msg}"
+    );
+}

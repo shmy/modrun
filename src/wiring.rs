@@ -8,6 +8,10 @@ macro_rules! impl_wiring_methods {
         impl $ty {
             /// Register a constructor. Dependencies are injected by cloning singletons
             /// (or by cloning an `Arc<T>` if the parameter is `Arc<T>`).
+            ///
+            /// Constructors that return `Result<T, E>` must use
+            /// [`provide_result`](Self::provide_result) instead — this method
+            /// registers the `Result` type itself.
             #[must_use]
             pub fn provide<M, F>(mut self, ctor: F) -> Self
             where

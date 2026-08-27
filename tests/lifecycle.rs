@@ -8,6 +8,17 @@ use std::time::Duration;
 
 use modrun::{Error, Hook, Lifecycle, Modrun, Module, Shutdowner, hook};
 
+/// Build a repeatable OnStop closure for [`hook`] (required after StopGuard retry).
+macro_rules! on_stop_shared {
+    ($shared:expr, |$var:ident| $body:block) => {{
+        let __shared = Arc::clone(&$shared);
+        move || {
+            let $var = Arc::clone(&__shared);
+            async move $body
+        }
+    }};
+}
+
 #[tokio::test]
 async fn shared_counter_lifecycle() {
     #[derive(Clone)]
@@ -191,10 +202,10 @@ async fn run_stops_hooks_after_programmatic_shutdown() {
                     shutdown.shutdown();
                     Ok(())
                 })
-                .on_stop(move || async move {
+                .on_stop(on_stop_shared!(stopped, |stopped| {
                     stopped.lock().unwrap().push("stop");
                     Ok(())
-                }),
+                })),
         )
         .unwrap();
     }
@@ -218,10 +229,10 @@ async fn stop_hooks_run_at_most_once() {
 
     fn boot(lc: Lifecycle, log: Log) {
         let counter = Arc::clone(&log.0);
-        lc.append(hook().on_stop(move || async move {
+        lc.append(hook().on_stop(on_stop_shared!(counter, |counter| {
             counter.fetch_add(1, Ordering::SeqCst);
             Ok(())
-        }))
+        })))
         .unwrap();
         lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
             .unwrap();
@@ -251,10 +262,10 @@ async fn start_timeout_unwinds_already_started_hooks() {
                     l1.lock().unwrap().push("start-ok");
                     Ok(())
                 })
-                .on_stop(move || async move {
+                .on_stop(on_stop_shared!(l2, |l2| {
                     l2.lock().unwrap().push("stop-ok");
                     Ok(())
-                }),
+                })),
         )
         .unwrap();
         lc.append(hook().on_start(|| async {
@@ -303,18 +314,18 @@ async fn append_from_start_factory_does_not_deadlock() {
 async fn hook_without_on_stop_does_not_truncate_stop_chain() {
     fn boot(lc: Lifecycle, log: Arc<Mutex<Vec<&'static str>>>) {
         let first = Arc::clone(&log);
-        lc.append(hook().on_stop(move || async move {
+        lc.append(hook().on_stop(on_stop_shared!(first, |first| {
             first.lock().unwrap().push("first");
             Ok(())
-        }))
+        })))
         .unwrap();
 
         lc.append(hook().on_start(|| async { Ok(()) })).unwrap();
 
-        lc.append(hook().on_stop(move || async move {
+        lc.append(hook().on_stop(on_stop_shared!(log, |log| {
             log.lock().unwrap().push("last");
             Ok(())
-        }))
+        })))
         .unwrap();
     }
 
@@ -338,10 +349,10 @@ async fn hook_without_on_stop_does_not_truncate_unwind() {
         lc.append(
             hook()
                 .on_start(|| async { Ok(()) })
-                .on_stop(move || async move {
+                .on_stop(on_stop_shared!(log, |log| {
                     log.lock().unwrap().push("first");
                     Ok(())
-                }),
+                })),
         )
         .unwrap();
 
@@ -454,10 +465,10 @@ async fn shutdown_during_start_unwinds_gracefully() {
                     started.lock().unwrap().push("start-ok");
                     Ok(())
                 })
-                .on_stop(move || async move {
+                .on_stop(on_stop_shared!(stopped, |stopped| {
                     stopped.lock().unwrap().push("stop-ok");
                     Ok(())
-                }),
+                })),
         )
         .unwrap();
         lc.append(hook().on_start(|| async {
@@ -499,6 +510,288 @@ async fn shutdown_during_build_is_ok() {
         .run()
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_during_build_runs_stop_only_hooks() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    #[derive(Clone)]
+    struct Pool;
+
+    fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
+        let stopped = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(stopped, |stopped| {
+            stopped.lock().unwrap().push("stop-ok");
+            Ok(())
+        })))
+        .unwrap();
+
+        let s = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            s.shutdown();
+        });
+    }
+
+    async fn connect(_shutdown: Shutdowner) -> Pool {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Pool
+    }
+
+    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    Modrun::builder()
+        .supply(Log(Arc::clone(&shared)))
+        .invoke(boot)
+        .provide_async(connect)
+        .invoke(|_p: Pool| {})
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(shared.lock().unwrap().as_slice(), ["stop-ok"]);
+}
+
+#[tokio::test]
+async fn shutdown_during_build_runs_stop_only_after_unstarted_start_hook() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    #[derive(Clone)]
+    struct Pool;
+
+    fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
+        let started = Arc::clone(&log.0);
+        let started_stop = Arc::clone(&log.0);
+        lc.append(
+            hook()
+                .on_start(move || async move {
+                    started.lock().unwrap().push("start");
+                    Ok(())
+                })
+                .on_stop(on_stop_shared!(started_stop, |started_stop| {
+                    started_stop.lock().unwrap().push("stop-started");
+                    Ok(())
+                })),
+        )
+        .unwrap();
+        let only = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(only, |only| {
+            only.lock().unwrap().push("stop-only");
+            Ok(())
+        })))
+        .unwrap();
+
+        let s = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            s.shutdown();
+        });
+    }
+
+    async fn connect(_shutdown: Shutdowner) -> Pool {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Pool
+    }
+
+    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    Modrun::builder()
+        .supply(Log(Arc::clone(&shared)))
+        .invoke(boot)
+        .provide_async(connect)
+        .invoke(|_p: Pool| {})
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(shared.lock().unwrap().as_slice(), ["stop-only"]);
+}
+
+#[tokio::test]
+async fn run_prefers_build_error_over_concurrent_shutdown() {
+    #[derive(Clone)]
+    struct Pool;
+
+    async fn fail_build(shutdown: Shutdowner) -> Result<Pool, Error> {
+        shutdown.shutdown();
+        Err(Error::hook("build-boom"))
+    }
+
+    for _ in 0..32 {
+        let err = Modrun::builder()
+            .provide_result_async(fail_build)
+            .invoke(|_p: Pool| {})
+            .run()
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("build-boom"),
+            "expected build error, not graceful shutdown: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn run_prefers_start_error_over_concurrent_shutdown() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
+        let started = Arc::clone(&log.0);
+        let stopped = Arc::clone(&log.0);
+        lc.append(
+            hook()
+                .on_start(move || async move {
+                    started.lock().unwrap().push("start-ok");
+                    Ok(())
+                })
+                .on_stop(on_stop_shared!(stopped, |stopped| {
+                    stopped.lock().unwrap().push("stop-ok");
+                    Ok(())
+                })),
+        )
+        .unwrap();
+        lc.append(hook().on_start(move || async move {
+            shutdown.shutdown();
+            Err(Error::hook("start-boom"))
+        }))
+        .unwrap();
+    }
+
+    for _ in 0..32 {
+        let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err = Modrun::builder()
+            .supply(Log(Arc::clone(&shared)))
+            .invoke(boot)
+            .run()
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("start-boom"),
+            "expected start error, not graceful shutdown: {msg}"
+        );
+        assert_eq!(shared.lock().unwrap().as_slice(), ["start-ok", "stop-ok"]);
+    }
+}
+
+#[tokio::test]
+async fn failed_start_stays_err_if_shutdown_during_unwind() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
+        let stopped = Arc::clone(&log.0);
+        let s = shutdown.clone();
+
+        lc.append(hook().on_start(|| async { Ok(()) }).on_stop({
+            let stopped = Arc::clone(&stopped);
+            move || {
+                let stopped = Arc::clone(&stopped);
+                let s = s.clone();
+                async move {
+                    stopped.lock().unwrap().push("stop-ok");
+                    s.shutdown();
+                    Ok(())
+                }
+            }
+        }))
+        .unwrap();
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
+            .unwrap();
+    }
+
+    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err = Modrun::builder()
+        .supply(Log(Arc::clone(&shared)))
+        .invoke(boot)
+        .run()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("boom"),
+        "start failure must not become Ok after shutdown during unwind: {msg}"
+    );
+    assert_eq!(shared.lock().unwrap().as_slice(), ["stop-ok"]);
+}
+
+#[tokio::test]
+async fn build_timeout_after_invoke_unwinds_stop_only() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    #[derive(Clone)]
+    struct Slow;
+
+    fn boot(lc: Lifecycle, log: Log) {
+        let stopped = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(stopped, |stopped| {
+            stopped.lock().unwrap().push("stop-ok");
+            Ok(())
+        })))
+        .unwrap();
+    }
+
+    async fn slow() -> Slow {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Slow
+    }
+
+    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err = Modrun::builder()
+        .build_timeout(Duration::from_millis(50))
+        .supply(Log(Arc::clone(&shared)))
+        .invoke(boot)
+        .provide_async(slow)
+        .invoke(|_: Slow| {})
+        .start()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("build timed out"), "unexpected: {msg}");
+    assert_eq!(shared.lock().unwrap().as_slice(), ["stop-ok"]);
+}
+
+#[tokio::test]
+async fn stop_timeout_abandons_inflight_and_remaining() {
+    #[derive(Clone)]
+    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    fn boot(lc: Lifecycle, log: Log) {
+        let l2 = Arc::clone(&log.0);
+        let l1 = Arc::clone(&log.0);
+        lc.append(hook().on_stop(on_stop_shared!(l2, |l2| {
+            l2.lock().unwrap().push("never");
+            Ok(())
+        })))
+        .unwrap();
+        lc.append(hook().on_stop(on_stop_shared!(l1, |l1| {
+            l1.lock().unwrap().push("hang");
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            Ok(())
+        })))
+        .unwrap();
+    }
+
+    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err = Modrun::builder()
+        .stop_timeout(Duration::from_millis(50))
+        .supply(Log(Arc::clone(&shared)))
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("timed out"), "unexpected: {msg}");
+    assert_eq!(
+        shared.lock().unwrap().as_slice(),
+        ["hang"],
+        "remaining OnStop after a timed-out hook must not run"
+    );
 }
 
 #[tokio::test]
@@ -620,10 +913,18 @@ async fn append_while_stopping_errors() {
 
     fn boot(lc: Lifecycle, slot: Arc<Mutex<Option<Lifecycle>>>, gate: StopGate) {
         *slot.lock().unwrap() = Some(lc.clone());
-        lc.append(hook().on_stop(move || async move {
-            gate.entered.notify_one();
-            gate.release.notified().await;
-            Ok(())
+        lc.append(hook().on_stop({
+            let entered = Arc::clone(&gate.entered);
+            let release = Arc::clone(&gate.release);
+            move || {
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    Ok(())
+                }
+            }
         }))
         .unwrap();
     }
@@ -842,6 +1143,10 @@ async fn append_after_failed_start_is_stopping() {
         .await
         .unwrap_err();
     assert!(format!("{err}").contains("boom"), "unexpected: {err}");
+    assert!(
+        format!("{err}").contains("hook failed"),
+        "unexpected: {err}"
+    );
 
     let lc = lc_holder.lock().unwrap().clone().unwrap();
     assert!(matches!(lc.append(hook()), Err(Error::AppendWhileStopping)));
@@ -925,4 +1230,105 @@ async fn failed_struct_start_does_not_run_stop() {
         .unwrap_err();
     assert!(format!("{err}").contains("boom"), "unexpected: {err}");
     assert_eq!(log.0.lock().unwrap().as_slice(), ["start"]);
+}
+
+#[tokio::test]
+async fn struct_stop_only_after_failed_start_still_runs() {
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
+
+    struct StopOnly {
+        log: Log,
+    }
+
+    impl Hook for StopOnly {
+        fn has_start(&self) -> bool {
+            false
+        }
+
+        async fn on_stop(&mut self) -> modrun::Result<()> {
+            self.log.0.lock().unwrap().push("stop-ok");
+            Ok(())
+        }
+    }
+
+    fn boot(lc: Lifecycle, log: Log) {
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
+            .unwrap();
+        lc.append(StopOnly { log }).unwrap();
+    }
+
+    let log = Log(Arc::new(Mutex::new(Vec::new())));
+    let err = Modrun::builder()
+        .supply(log.clone())
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("boom"), "unexpected: {err}");
+    assert_eq!(log.0.lock().unwrap().as_slice(), ["stop-ok"]);
+}
+
+#[tokio::test]
+async fn struct_stop_only_without_has_start_is_skipped_on_unwind() {
+    #[derive(Clone)]
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
+
+    struct StopOnly {
+        log: Log,
+    }
+
+    impl Hook for StopOnly {
+        async fn on_stop(&mut self) -> modrun::Result<()> {
+            self.log.0.lock().unwrap().push("stop-ok");
+            Ok(())
+        }
+    }
+
+    fn boot(lc: Lifecycle, log: Log) {
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
+            .unwrap();
+        lc.append(StopOnly { log }).unwrap();
+    }
+
+    let log = Log(Arc::new(Mutex::new(Vec::new())));
+    let err = Modrun::builder()
+        .supply(log.clone())
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("boom"), "unexpected: {err}");
+    assert!(log.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn on_stop_join_panic_surfaces_as_error() {
+    fn boot(lc: Lifecycle) {
+        lc.append(hook().on_stop(|| async {
+            let task = tokio::spawn(async {
+                panic!("join-panic");
+            });
+            match task.await {
+                Ok(()) => Ok(()),
+                Err(join) => Err(Error::hook(join)),
+            }
+        }))
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("hook failed"), "unexpected: {msg}");
+    assert!(
+        msg.contains("panic") || msg.contains("join"),
+        "unexpected: {msg}"
+    );
 }

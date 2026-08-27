@@ -8,6 +8,7 @@ use crate::error::aggregate_errors;
 use crate::future::BoxFuture;
 
 type Callback = Box<dyn FnOnce() -> BoxFuture<'static, Result<()>> + Send>;
+type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync>;
 
 /// Start/stop callbacks for a component.
 ///
@@ -54,23 +55,47 @@ type Callback = Box<dyn FnOnce() -> BoxFuture<'static, Result<()>> + Send>;
 /// future. Any task spawned by a hook must be tracked and shut down explicitly.
 /// Panicking is considered a fatal programming error and is not converted into
 /// [`Error`]; in particular, a panic during start may bypass lifecycle unwind.
+///
+/// # Stop-only struct hooks
+///
+/// The default [`has_start`](Self::has_start) is `true`, so a struct that only
+/// implements [`on_stop`](Self::on_stop) is still treated as needing OnStart.
+/// Register it **after** a hook that fails OnStart and it will **not** be
+/// activated for unwind unless you override `has_start`:
+///
+/// ```
+/// # use modrun::{Hook, Result};
+/// struct Metrics;
+///
+/// impl Hook for Metrics {
+///     fn has_start(&self) -> bool {
+///         false
+///     }
+///
+///     async fn on_stop(&mut self) -> Result<()> {
+///         println!("flush metrics");
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// For one-off stop callbacks, [`hook().on_stop(...)`](crate::hook) already
+/// behaves as stop-only.
 pub trait Hook: Send + 'static {
     /// Label used in framework logs. Does not affect execution order.
     fn name(&self) -> Option<&'static str> {
         None
     }
 
-    /// `false` when [`on_start`](Self::on_start) is a no-op.
+    /// Whether this hook runs an OnStart phase.
     ///
-    /// Stop-only hooks are marked active as soon as they are reached, so they
-    /// still run if a later start hook fails.
-    #[doc(hidden)]
+    /// Defaults to `true`. Override to `false` for stop-only struct hooks (see
+    /// [trait-level notes](Self#stop-only-struct-hooks)).
     fn has_start(&self) -> bool {
         true
     }
 
-    /// `false` when [`on_stop`](Self::on_stop) is a no-op.
-    #[doc(hidden)]
+    /// Whether this hook runs an OnStop phase.
     fn has_stop(&self) -> bool {
         true
     }
@@ -93,7 +118,7 @@ pub trait Hook: Send + 'static {
 pub struct HookFn {
     name: Option<&'static str>,
     on_start: Option<Callback>,
-    on_stop: Option<Callback>,
+    on_stop: Option<StopCallback>,
 }
 
 /// Build an ad-hoc [`Hook`] from closures.
@@ -146,14 +171,19 @@ impl HookFn {
     /// A hook with OnStop but no OnStart is considered active immediately and
     /// also runs when a later start hook fails and the lifecycle unwinds.
     ///
+    /// `f` must be callable more than once (`Fn`, not `FnOnce`) so an in-flight
+    /// OnStop can be retried after cancellation. Capture shared state with
+    /// [`Arc`](std::sync::Arc) and clone it inside `f` when needed.
+    ///
     /// Calling this twice on the same [`HookFn`] keeps the last callback.
     #[must_use]
     pub fn on_stop<F, Fut>(mut self, f: F) -> Self
     where
-        F: FnOnce() -> Fut + Send + 'static,
+        F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        self.on_stop = Some(Box::new(move || Box::pin(f())));
+        let f = Arc::new(f);
+        self.on_stop = Some(Arc::new(move || Box::pin(f())));
         self
     }
 }
@@ -182,7 +212,7 @@ impl Hook for HookFn {
     }
 
     fn on_stop(&mut self) -> impl Future<Output = Result<()>> + Send {
-        let f = self.on_stop.take();
+        let f = self.on_stop.clone();
         async move {
             match f {
                 Some(f) => f().await,
@@ -226,7 +256,6 @@ struct InflightHook {
     lifecycle: Option<Lifecycle>,
     idx: usize,
     name: Option<&'static str>,
-    start: bool,
     finished: bool,
 }
 
@@ -237,52 +266,84 @@ impl InflightHook {
             lifecycle: Some(lifecycle),
             idx,
             name,
-            start: true,
-            finished: false,
-        }
-    }
-
-    fn stop(idx: usize, name: Option<&'static str>) -> Self {
-        crate::trace::on_stop_executing(idx, name);
-        Self {
-            lifecycle: None,
-            idx,
-            name,
-            start: false,
             finished: false,
         }
     }
 
     fn ok(&mut self, runtime: std::time::Duration) {
         self.finished = true;
-        if self.start {
-            crate::trace::on_start_executed(self.idx, self.name, runtime);
-        } else {
-            crate::trace::on_stop_executed(self.idx, self.name, runtime);
-        }
+        crate::trace::on_start_executed(self.idx, self.name, runtime);
     }
 
     fn fail(&mut self, err: &Error) {
         self.finished = true;
-        if self.start {
-            crate::trace::on_start_failed(self.idx, self.name, err);
-        } else {
-            crate::trace::on_stop_failed(self.idx, self.name, err);
-        }
+        crate::trace::on_start_failed(self.idx, self.name, err);
     }
 }
 
 impl Drop for InflightHook {
     fn drop(&mut self) {
         if !self.finished {
-            if self.start {
-                crate::trace::on_start_cancelled(self.idx, self.name);
-                if let Some(lc) = self.lifecycle.take() {
-                    lc.reject_append_and_activate_trailing();
-                }
-            } else {
-                crate::trace::on_stop_cancelled(self.idx, self.name);
+            crate::trace::on_start_cancelled(self.idx, self.name);
+            if let Some(lc) = self.lifecycle.take() {
+                lc.reject_append_and_activate_trailing();
             }
+        }
+    }
+}
+
+/// Holds a hook taken for OnStop; if the future is cancelled before completion,
+/// the hook is written back so a follow-up unwind pass can retry it.
+struct StopGuard {
+    lifecycle: Lifecycle,
+    idx: usize,
+    name: Option<&'static str>,
+    hook: Option<Box<dyn ErasedHook>>,
+    finished: bool,
+}
+
+impl StopGuard {
+    fn new(
+        lifecycle: Lifecycle,
+        idx: usize,
+        name: Option<&'static str>,
+        hook: Box<dyn ErasedHook>,
+    ) -> Self {
+        crate::trace::on_stop_executing(idx, name);
+        Self {
+            lifecycle,
+            idx,
+            name,
+            hook: Some(hook),
+            finished: false,
+        }
+    }
+
+    async fn run(mut self) -> Result<()> {
+        let started_at = Instant::now();
+        let result = {
+            let hook = self.hook.as_mut().expect("hook present");
+            hook.on_stop().await
+        };
+        match &result {
+            Ok(()) => crate::trace::on_stop_executed(self.idx, self.name, started_at.elapsed()),
+            Err(err) => crate::trace::on_stop_failed(self.idx, self.name, err),
+        }
+        self.finished = true;
+        self.hook = None;
+        result
+    }
+}
+
+impl Drop for StopGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            if let Some(hook) = self.hook.take() {
+                let mut state = self.lifecycle.state();
+                state.hooks[self.idx].inner = Some(hook);
+                state.started += 1;
+            }
+            crate::trace::on_stop_cancelled(self.idx, self.name);
         }
     }
 }
@@ -443,6 +504,30 @@ impl Lifecycle {
         }
     }
 
+    /// Mark every remaining stop-only hook as started and drop hooks that never
+    /// ran OnStart, so a build cancel/failure can unwind stop-only hooks even
+    /// when they sit after a start hook. Start-failure still uses consecutive
+    /// trailing activation from the failed slot.
+    pub(crate) fn prepare_for_unwind(&self) {
+        let mut state = self.state();
+        state.phase = Phase::Stopping;
+        while state.started < state.hooks.len() {
+            match state.hooks[state.started].inner.as_ref() {
+                None => {
+                    state.started += 1;
+                }
+                Some(hook) if !hook.has_start() => {
+                    state.started += 1;
+                }
+                Some(_) => {
+                    let idx = state.started;
+                    state.hooks[idx].inner = None;
+                    state.started += 1;
+                }
+            }
+        }
+    }
+
     fn reject_append_and_activate_trailing(&self) {
         let mut state = self.state();
         state.phase = Phase::Stopping;
@@ -481,15 +566,10 @@ impl Lifecycle {
             state.phase = Phase::Stopping;
         }
         let mut errors = Vec::new();
-        while let Some((idx, name, mut hook)) = self.take_next_stop() {
-            let mut inflight = InflightHook::stop(idx, name);
-            let started_at = Instant::now();
-            match hook.on_stop().await {
-                Ok(()) => inflight.ok(started_at.elapsed()),
-                Err(err) => {
-                    inflight.fail(&err);
-                    errors.push(err);
-                }
+        while let Some((idx, name, hook)) = self.take_next_stop() {
+            match StopGuard::new(self.clone(), idx, name, hook).run().await {
+                Ok(()) => {}
+                Err(err) => errors.push(err),
             }
         }
         aggregate_errors(errors)
@@ -498,15 +578,10 @@ impl Lifecycle {
     async fn stop_first(&self, count: usize) -> Result<()> {
         let mut errors = Vec::new();
         for _ in 0..count {
-            if let Some((idx, name, mut hook)) = self.take_next_stop() {
-                let mut inflight = InflightHook::stop(idx, name);
-                let started_at = Instant::now();
-                match hook.on_stop().await {
-                    Ok(()) => inflight.ok(started_at.elapsed()),
-                    Err(err) => {
-                        inflight.fail(&err);
-                        errors.push(err);
-                    }
+            if let Some((idx, name, hook)) = self.take_next_stop() {
+                match StopGuard::new(self.clone(), idx, name, hook).run().await {
+                    Ok(()) => {}
+                    Err(err) => errors.push(err),
                 }
             } else {
                 break;
@@ -516,10 +591,10 @@ impl Lifecycle {
     }
 
     /// Take the next stoppable hook among those that have started, in reverse
-    /// order. Taking one at a time means a cancelled `stop` future still leaves
-    /// remaining hooks available for a follow-up best-effort pass. The hook is
-    /// taken under the lock and `on_stop` is invoked after releasing it, so user
-    /// code may re-enter [`Lifecycle`].
+    /// order. The hook is taken under the lock and `on_stop` runs after releasing
+    /// it. If that future is cancelled, [`StopGuard`] writes the hook back so a
+    /// follow-up unwind can retry it; a timeout abandons the in-flight hook without
+    /// a second budget (see caller).
     fn take_next_stop(&self) -> Option<(usize, Option<&'static str>, Box<dyn ErasedHook>)> {
         let mut state = self.state();
         loop {
@@ -536,5 +611,80 @@ impl Lifecycle {
             }
             return Some((idx, state.hooks[idx].name, hook));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn stop_guard_writes_back_cancelled_on_stop() {
+        let lc = Lifecycle::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let l = Arc::clone(&log);
+        let l2 = Arc::clone(&l);
+        lc.append(hook().on_stop(move || {
+            let l = Arc::clone(&l2);
+            async move {
+                l.lock().unwrap().push("begin");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                l.lock().unwrap().push("end");
+                Ok(())
+            }
+        }))
+        .unwrap();
+        lc.prepare_for_unwind();
+
+        let lc2 = lc.clone();
+        tokio::select! {
+            _ = lc.unwind_started() => {}
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        assert_eq!(log.lock().unwrap().as_slice(), ["begin"]);
+
+        lc2.unwind_started().await.unwrap();
+        assert_eq!(log.lock().unwrap().as_slice(), ["begin", "begin", "end"]);
+    }
+
+    #[tokio::test]
+    async fn prepare_for_unwind_runs_stop_only_after_unstarted_hooks() {
+        let lc = Lifecycle::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let started = Arc::clone(&log);
+        let stopped = Arc::clone(&log);
+        lc.append(
+            hook()
+                .on_start(move || {
+                    let started = Arc::clone(&started);
+                    async move {
+                        started.lock().unwrap().push("start");
+                        Ok(())
+                    }
+                })
+                .on_stop(move || {
+                    let stopped = Arc::clone(&stopped);
+                    async move {
+                        stopped.lock().unwrap().push("stop-started");
+                        Ok(())
+                    }
+                }),
+        )
+        .unwrap();
+        let only = Arc::clone(&log);
+        lc.append(hook().on_stop(move || {
+            let only = Arc::clone(&only);
+            async move {
+                only.lock().unwrap().push("stop-only");
+                Ok(())
+            }
+        }))
+        .unwrap();
+
+        lc.prepare_for_unwind();
+        lc.unwind_started().await.unwrap();
+        assert_eq!(log.lock().unwrap().as_slice(), ["stop-only"]);
     }
 }

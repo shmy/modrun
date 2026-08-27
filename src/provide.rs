@@ -51,6 +51,15 @@ struct ProvideOption {
 impl ModOption for ProvideOption {
     fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
         let type_name = self.provider.result_name();
+        if type_name.starts_with("core::result::Result<")
+            || type_name.starts_with("std::result::Result<")
+        {
+            tracing::warn!(
+                target: crate::trace::TARGET,
+                type_name,
+                "constructor appears to return Result; use provide_result instead of provide"
+            );
+        }
         let private = app.private_mode;
         let scope = app.current_scope;
         app.container
@@ -62,9 +71,16 @@ impl ModOption for ProvideOption {
 
 /// Bound for constructors accepted by [`ModrunBuilder::provide`](crate::ModrunBuilder::provide).
 ///
+/// Constructors that return `Result<T, E>` must use
+/// [`provide_result`](crate::ModrunBuilder::provide_result) (or the async
+/// variants) instead — `provide` registers the `Result` type itself.
+///
 /// Implemented for any `Fn(A, B, ..) -> T` of up to **eight** `Clone` arguments.
+/// Constructor closures must be `Send + Sync`; keep `!Sync` state inside `T` or
+/// register it from an invoker (invokers are only `Send`).
 /// The result type itself need not be `Clone`; inject `Arc<T>` to avoid a copy.
-/// `Marker` distinguishes those arities and is always inferred.
+/// `Marker` distinguishes those arities and is always inferred — do not name
+/// these types in application code.
 pub trait ProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;

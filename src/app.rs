@@ -217,9 +217,11 @@ impl ModrunBuilder {
     /// calling `run` repeatedly on the same runtime does not accumulate tasks.
     ///
     /// A shutdown request or OS signal during build or start cancels that phase
-    /// and unwinds any hooks that already started. If cleanup succeeds, `run`
+    /// and unwinds hooks that already started, plus any stop-only hooks already
+    /// registered (even if OnStart never ran). If cleanup succeeds, `run`
     /// returns `Ok(())` so process managers treat it as a graceful stop rather
-    /// than a crash. A timeout or hook failure still returns an error.
+    /// than a crash. A timeout or hook failure still returns an error — a
+    /// concurrent shutdown does not turn that failure into `Ok(())`.
     ///
     /// # Errors
     ///
@@ -231,37 +233,66 @@ impl ModrunBuilder {
         let shutdown = Shutdowner::new();
         let mut signals = SignalWatch::install()?;
 
+        let mut state = self.into_build_state(lifecycle.clone(), shutdown.clone())?;
+        let stop_timeout = state.stop_timeout;
+
         let app = tokio::select! {
-            result = self.build_with(lifecycle, shutdown.clone()) => result?,
+            biased;
+            result = run_invokers(&mut state) => match result {
+                Ok(()) => built_app_from_state(state),
+                Err(e) => {
+                    return finish_run(
+                        Err(e),
+                        unwind_registered(&lifecycle, stop_timeout).await,
+                    );
+                }
+            },
             _ = shutdown.wait() => {
                 crate::trace::shutdown_requested();
-                return Ok(());
+                return finish_run(
+                    Ok(()),
+                    unwind_registered(&lifecycle, stop_timeout).await,
+                );
             }
             signal = signals.recv() => {
                 crate::trace::received_signal(signal);
                 shutdown.shutdown();
-                return Ok(());
+                crate::trace::shutdown_requested();
+                return finish_run(
+                    Ok(()),
+                    unwind_registered(&lifecycle, stop_timeout).await,
+                );
             }
         };
 
+        // Race only OnStart. Unwind runs afterwards so a shutdown cannot
+        // swallow a start error that is already in hand.
         let started = tokio::select! {
-            result = app.start() => result,
+            biased;
+            result = app.start_hooks() => result,
             _ = shutdown.wait() => {
                 crate::trace::shutdown_requested();
-                crate::trace::rolling_back(&Error::ShutdownDuringStart);
-                return graceful_unwind(&app).await;
+                crate::trace::rolling_back_after_shutdown();
+                return finish_run(Ok(()), graceful_unwind(&app).await);
             }
             signal = signals.recv() => {
                 crate::trace::received_signal(signal);
                 shutdown.shutdown();
-                crate::trace::rolling_back(&Error::ShutdownDuringStart);
-                return graceful_unwind(&app).await;
+                crate::trace::shutdown_requested();
+                crate::trace::rolling_back_after_shutdown();
+                return finish_run(Ok(()), graceful_unwind(&app).await);
             }
         };
 
-        // start() already ran a budgeted unwind on failure; remaining hooks after
-        // an unwind timeout are abandoned rather than given a second budget.
-        started?;
+        match started {
+            Ok(()) => crate::trace::started(),
+            Err(err) => {
+                crate::trace::rolling_back(&err);
+                let cleanup = graceful_unwind(&app).await;
+                crate::trace::start_failed(&err);
+                return finish_run(Err(err), cleanup);
+            }
+        }
 
         tokio::select! {
             _ = shutdown.wait() => {
@@ -287,27 +318,30 @@ impl ModrunBuilder {
     /// while unwinding).
     pub async fn start(self) -> Result<RunningApp> {
         self.print_banner();
-        let app = self.build().await?;
+        let lifecycle = Lifecycle::new();
+        let shutdown = Shutdowner::new();
+        let mut state = self.into_build_state(lifecycle.clone(), shutdown)?;
+        let stop_timeout = state.stop_timeout;
+        if let Err(e) = run_invokers(&mut state).await {
+            finish_run(Err(e), unwind_registered(&lifecycle, stop_timeout).await)?;
+        }
+        let app = built_app_from_state(state);
         app.start().await?;
         Ok(RunningApp { inner: Some(app) })
     }
 
-    async fn build(self) -> Result<BuiltApp> {
-        self.build_with(Lifecycle::new(), Shutdowner::new()).await
-    }
-
-    async fn build_with(self, lifecycle: Lifecycle, shutdown: Shutdowner) -> Result<BuiltApp> {
+    fn into_build_state(self, lifecycle: Lifecycle, shutdown: Shutdowner) -> Result<BuildState> {
         let mut state = BuildState {
             container: Container::new(),
             invokers: Vec::new(),
-            lifecycle: lifecycle.clone(),
+            lifecycle,
             build_timeout: Some(DEFAULT_TIMEOUT),
             start_timeout: Some(DEFAULT_TIMEOUT),
             stop_timeout: Some(DEFAULT_TIMEOUT),
             current_scope: ScopeId::ROOT,
             private_mode: false,
         };
-        seed_builtins(&mut state.container, lifecycle, shutdown)?;
+        seed_builtins(&mut state.container, state.lifecycle.clone(), shutdown)?;
 
         for opt in self.options {
             opt.apply(&mut state)?;
@@ -320,38 +354,74 @@ impl ModrunBuilder {
             .collect();
         state.container.validate(&invoker_deps)?;
 
-        // Consume invokers one by one (each call is FnOnce).
-        let invokers = std::mem::take(&mut state.invokers);
-        let budget = state.build_timeout;
-        let invoke = async {
-            for scoped in invokers {
-                let ScopedInvoker { scope, invoker } = scoped;
-                let function = invoker.name();
-                let deps = invoker.dep_types().to_vec();
-                let module = state.container.scopes().name(scope);
-                crate::trace::invoking(function, &deps, module);
-                let previous = state.container.enter_scope(scope);
-                let result = invoker.call(&mut state.container).await;
-                state.container.leave_scope(previous);
-                if let Err(ref err) = result {
-                    crate::trace::invoke_failed(function, &deps, module, err);
-                }
-                result?;
-            }
-            Ok(())
-        };
-        with_timeout(
-            budget,
-            invoke,
-            Error::BuildTimeout(budget.unwrap_or(Duration::ZERO)),
-        )
-        .await?;
+        Ok(state)
+    }
+}
 
-        Ok(BuiltApp {
-            lifecycle: state.lifecycle,
-            start_timeout: state.start_timeout,
-            stop_timeout: state.stop_timeout,
-        })
+async fn run_invokers(state: &mut BuildState) -> Result<()> {
+    let invokers = std::mem::take(&mut state.invokers);
+    let budget = state.build_timeout;
+    let invoke = async {
+        for scoped in invokers {
+            let ScopedInvoker { scope, invoker } = scoped;
+            let function = invoker.name();
+            let deps = invoker.dep_types().to_vec();
+            let module = state.container.scopes().name(scope);
+            crate::trace::invoking(function, &deps, module);
+            let previous = state.container.enter_scope(scope);
+            let result = invoker.call(&mut state.container).await;
+            state.container.leave_scope(previous);
+            if let Err(ref err) = result {
+                crate::trace::invoke_failed(function, &deps, module, err);
+            }
+            result?;
+        }
+        Ok(())
+    };
+    with_timeout(
+        budget,
+        invoke,
+        Error::BuildTimeout(budget.unwrap_or(Duration::ZERO)),
+    )
+    .await
+}
+
+fn built_app_from_state(state: BuildState) -> BuiltApp {
+    BuiltApp {
+        lifecycle: state.lifecycle,
+        start_timeout: state.start_timeout,
+        stop_timeout: state.stop_timeout,
+    }
+}
+
+fn finish_run(phase: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match phase {
+        Ok(()) => cleanup,
+        Err(e) => combine_results(Err(e), cleanup),
+    }
+}
+
+async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>) -> Result<()> {
+    lifecycle.prepare_for_unwind();
+    match with_timeout(
+        stop_timeout,
+        lifecycle.unwind_started(),
+        Error::UnwindTimeout(stop_timeout.unwrap_or(Duration::ZERO)),
+    )
+    .await
+    {
+        Ok(()) => {
+            crate::trace::rolled_back();
+            Ok(())
+        }
+        Err(err) => {
+            crate::trace::rollback_failed(&err);
+            let leftover = lifecycle.pending_stops();
+            if leftover > 0 {
+                crate::trace::hooks_abandoned(leftover);
+            }
+            Err(err)
+        }
     }
 }
 
@@ -383,6 +453,10 @@ async fn graceful_unwind(app: &BuiltApp) -> Result<()> {
         }
         Err(err) => {
             crate::trace::rollback_failed(&err);
+            let leftover = app.lifecycle.pending_stops();
+            if leftover > 0 {
+                crate::trace::hooks_abandoned(leftover);
+            }
             Err(err)
         }
     }
@@ -403,14 +477,18 @@ async fn with_timeout(
 }
 
 impl BuiltApp {
-    async fn start(&self) -> Result<()> {
-        match with_timeout(
+    /// OnStart only. The caller is responsible for unwind on failure or cancel.
+    async fn start_hooks(&self) -> Result<()> {
+        with_timeout(
             self.start_timeout,
             self.lifecycle.start(),
             Error::StartTimeout(self.start_timeout.unwrap_or(Duration::ZERO)),
         )
         .await
-        {
+    }
+
+    async fn start(&self) -> Result<()> {
+        match self.start_hooks().await {
             Ok(()) => {
                 crate::trace::started();
                 Ok(())
@@ -420,6 +498,10 @@ impl BuiltApp {
                 let unwound = self.unwind_with_budget().await;
                 if let Err(ref unwind_err) = unwound {
                     crate::trace::rollback_failed(unwind_err);
+                    let leftover = self.lifecycle.pending_stops();
+                    if leftover > 0 {
+                        crate::trace::hooks_abandoned(leftover);
+                    }
                 } else {
                     crate::trace::rolled_back();
                 }

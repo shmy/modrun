@@ -163,7 +163,7 @@ mod wiring;
 
 pub use app::{Modrun, ModrunBuilder, RunningApp};
 pub use banner::DEFAULT_BANNER;
-pub use error::{BoxError, Error, Result};
+pub use error::{BoxError, Error, MultipleStopError, Result};
 pub use lifecycle::{Hook, HookFn, Lifecycle, hook};
 pub use module::Module;
 pub use shutdown::Shutdowner;

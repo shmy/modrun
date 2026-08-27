@@ -311,6 +311,10 @@ pub(crate) fn rolling_back(err: &crate::Error) {
     tracing::error!(target: TARGET, error = %err, "start failed, rolling back");
 }
 
+pub(crate) fn rolling_back_after_shutdown() {
+    tracing::error!(target: TARGET, "start interrupted by shutdown, rolling back");
+}
+
 pub(crate) fn rollback_failed(err: &crate::Error) {
     tracing::error!(target: TARGET, error = %err, "rollback failed");
 }

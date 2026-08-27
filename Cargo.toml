@@ -45,6 +45,7 @@ tokio = { version = "1", default-features = false, features = [
     "signal",
 ] }
 tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "env-filter",
     "ansi",
     "fmt",
     "std",

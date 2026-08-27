@@ -2,8 +2,8 @@
 name = "modrun"
 version = "0.1.0"
 edition = "2024"
-# edition 2024 requires 1.85+; keep aligned with CI MSRV job.
-rust-version = "1.85"
+# Keep aligned with CI MSRV job (let-chains need 1.88).
+rust-version = "1.88"
 description = "Lightweight app wiring: provide/invoke/lifecycle for Tokio services"
 license = "MIT"
 readme = "README.md"

@@ -10,7 +10,7 @@ use crate::module::Module;
 use crate::option::ModOption;
 use crate::scope::ScopeId;
 use crate::shutdown::Shutdowner;
-use crate::timeout::{DEFAULT_TIMEOUT, build_timeout, start_timeout, stop_timeout};
+use crate::timeout::DEFAULT_TIMEOUT;
 use crate::wiring::impl_wiring_methods;
 
 /// Entry point for configuring an application: [`Modrun::builder`].
@@ -41,10 +41,24 @@ pub struct Modrun;
 ///     .await
 /// # }
 /// ```
-#[derive(Default)]
 pub struct ModrunBuilder {
     options: Vec<Box<dyn ModOption>>,
     banner: crate::banner::Banner,
+    build_timeout: Option<Duration>,
+    start_timeout: Option<Duration>,
+    stop_timeout: Option<Duration>,
+}
+
+impl Default for ModrunBuilder {
+    fn default() -> Self {
+        Self {
+            options: Vec::new(),
+            banner: crate::banner::Banner::default(),
+            build_timeout: Some(DEFAULT_TIMEOUT),
+            start_timeout: Some(DEFAULT_TIMEOUT),
+            stop_timeout: Some(DEFAULT_TIMEOUT),
+        }
+    }
 }
 
 impl std::fmt::Debug for ModrunBuilder {
@@ -94,7 +108,7 @@ impl ModrunBuilder {
 
     /// [`build_timeout`](Self::build_timeout) for `&mut self`.
     pub fn build_timeout_mut(&mut self, duration: Duration) -> &mut Self {
-        self.push_option(build_timeout(Some(duration)));
+        self.build_timeout = Some(duration);
         self
     }
 
@@ -107,7 +121,7 @@ impl ModrunBuilder {
 
     /// [`no_build_timeout`](Self::no_build_timeout) for `&mut self`.
     pub fn no_build_timeout_mut(&mut self) -> &mut Self {
-        self.push_option(build_timeout(None));
+        self.build_timeout = None;
         self
     }
 
@@ -123,7 +137,7 @@ impl ModrunBuilder {
 
     /// [`start_timeout`](Self::start_timeout) for `&mut self`.
     pub fn start_timeout_mut(&mut self, duration: Duration) -> &mut Self {
-        self.push_option(start_timeout(Some(duration)));
+        self.start_timeout = Some(duration);
         self
     }
 
@@ -136,7 +150,7 @@ impl ModrunBuilder {
 
     /// [`no_start_timeout`](Self::no_start_timeout) for `&mut self`.
     pub fn no_start_timeout_mut(&mut self) -> &mut Self {
-        self.push_option(start_timeout(None));
+        self.start_timeout = None;
         self
     }
 
@@ -153,7 +167,7 @@ impl ModrunBuilder {
 
     /// [`stop_timeout`](Self::stop_timeout) for `&mut self`.
     pub fn stop_timeout_mut(&mut self, duration: Duration) -> &mut Self {
-        self.push_option(stop_timeout(Some(duration)));
+        self.stop_timeout = Some(duration);
         self
     }
 
@@ -166,7 +180,7 @@ impl ModrunBuilder {
 
     /// [`no_stop_timeout`](Self::no_stop_timeout) for `&mut self`.
     pub fn no_stop_timeout_mut(&mut self) -> &mut Self {
-        self.push_option(stop_timeout(None));
+        self.stop_timeout = None;
         self
     }
 
@@ -335,11 +349,10 @@ impl ModrunBuilder {
             container: Container::new(),
             invokers: Vec::new(),
             lifecycle,
-            build_timeout: Some(DEFAULT_TIMEOUT),
-            start_timeout: Some(DEFAULT_TIMEOUT),
-            stop_timeout: Some(DEFAULT_TIMEOUT),
+            build_timeout: self.build_timeout,
+            start_timeout: self.start_timeout,
+            stop_timeout: self.stop_timeout,
             current_scope: ScopeId::ROOT,
-            private_mode: false,
         };
         seed_builtins(&mut state.container, state.lifecycle.clone(), shutdown)?;
 
@@ -365,14 +378,14 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
         for scoped in invokers {
             let ScopedInvoker { scope, invoker } = scoped;
             let function = invoker.name();
-            let deps = invoker.dep_types().to_vec();
+            let deps = invoker.dep_list();
             let module = state.container.scopes().name(scope);
-            crate::trace::invoking(function, &deps, module);
+            crate::trace::invoking(function, deps.as_slice(), module);
             let previous = state.container.enter_scope(scope);
             let result = invoker.call(&mut state.container).await;
             state.container.leave_scope(previous);
             if let Err(ref err) = result {
-                crate::trace::invoke_failed(function, &deps, module, err);
+                crate::trace::invoke_failed(function, deps.as_slice(), module, err);
             }
             result?;
         }
@@ -436,7 +449,6 @@ pub(crate) struct BuildState {
     pub(crate) start_timeout: Option<Duration>,
     pub(crate) stop_timeout: Option<Duration>,
     pub(crate) current_scope: ScopeId,
-    pub(crate) private_mode: bool,
 }
 
 struct BuiltApp {

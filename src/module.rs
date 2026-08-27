@@ -110,22 +110,3 @@ impl ModOption for ModuleOption {
         result
     }
 }
-
-/// Marks nested provides/supplies as private to the current module.
-pub(crate) fn private(option: Box<dyn ModOption>) -> Box<dyn ModOption> {
-    Box::new(PrivateOption { inner: option })
-}
-
-struct PrivateOption {
-    inner: Box<dyn ModOption>,
-}
-
-impl ModOption for PrivateOption {
-    fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
-        let prev = app.private_mode;
-        app.private_mode = true;
-        let result = self.inner.apply(app);
-        app.private_mode = prev;
-        result
-    }
-}

@@ -91,12 +91,19 @@ pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
 /// so independent constructors in the same DAG layer can run concurrently.
 pub(crate) type ConstructFuture = BoxFuture<'static, Result<Constructed>>;
 
+/// Sync constructors finish inside [`Provider::construct`]; async ones return a
+/// future to be joined with the rest of the wave.
+pub(crate) enum ConstructOut {
+    Ready(Constructed),
+    Fut(ConstructFuture),
+}
+
 pub(crate) trait Provider: Send + Sync {
     fn result_type(&self) -> TypeId;
     fn result_name(&self) -> &'static str;
     fn alias_types(&self) -> &[TypeId];
     fn dep_types(&self) -> &[(TypeId, &'static str)];
-    fn construct(&self, container: &Container) -> Result<ConstructFuture>;
+    fn construct(&self, container: &Container) -> Result<ConstructOut>;
 }
 
 /// Identifies one provider: type, registration scope, and visibility.
@@ -115,7 +122,7 @@ pub(crate) struct Container {
     scopes: ScopeTree,
     values_public: TypeIdMap<TypeId, DynAny>,
     values_private: TypeIdMap<(TypeId, ScopeId), DynAny>,
-    providers: TypeIdMap<ProviderKey, Arc<dyn Provider>>,
+    providers: TypeIdMap<ProviderKey, Box<dyn Provider>>,
     /// Public provider keys keyed by result type *and* `Arc<T>` aliases.
     public_index: TypeIdMap<TypeId, ProviderKey>,
     /// Private `Arc<T>` aliases → canonical private provider key.
@@ -125,6 +132,9 @@ pub(crate) struct Container {
     provider_order_index: TypeIdMap<ProviderKey, usize>,
     constructing: TypeIdSet<ProviderKey>,
     active_scope: ScopeId,
+    /// Topological layers computed by [`Container::validate`]. `ensure_built`
+    /// filters each layer by the pending set instead of re-running Kahn.
+    layers: Vec<Vec<ProviderKey>>,
 }
 
 /// Clears in-flight constructing keys if a wave is cancelled or fails.
@@ -154,6 +164,7 @@ impl Container {
             provider_order_index: TypeIdMap::default(),
             constructing: TypeIdSet::default(),
             active_scope: ScopeId::ROOT,
+            layers: Vec::new(),
         }
     }
 
@@ -195,7 +206,7 @@ impl Container {
 
     pub(crate) fn insert_provider(
         &mut self,
-        provider: Arc<dyn Provider>,
+        provider: Box<dyn Provider>,
         scope: ScopeId,
         private: bool,
     ) -> Result<()> {
@@ -287,55 +298,98 @@ impl Container {
             self.collect_pending(id, name, from, &mut pending)?;
         }
 
-        while !pending.is_empty() {
-            let ready = self.ready_wave(&pending);
+        self.build_pending(&mut pending).await
+    }
+
+    async fn build_pending(&mut self, pending: &mut TypeIdSet<ProviderKey>) -> Result<()> {
+        let n = self.layers.len();
+        for i in 0..n {
+            if pending.is_empty() {
+                break;
+            }
+            let ready: Vec<ProviderKey> = self.layers[i]
+                .iter()
+                .copied()
+                .filter(|key| pending.contains(key))
+                .collect();
             if ready.is_empty() {
-                let name = pending
-                    .iter()
-                    .next()
-                    .map(|k| self.key_name(*k))
-                    .unwrap_or("<unknown>");
-                return Err(Error::Cycle(name.to_owned()));
+                continue;
             }
-
-            for &key in &ready {
-                if !self.constructing.insert(key) {
-                    return Err(Error::Cycle(self.key_name(key).to_owned()));
-                }
-            }
-
-            let guard = WaveGuard {
-                container: self,
-                keys: ready,
-            };
-
-            let mut futs = Vec::with_capacity(guard.keys.len());
-            for &key in &guard.keys {
-                let provider = Arc::clone(
-                    guard
-                        .container
-                        .provider_at(key)
-                        .expect("pending key missing provider"),
-                );
-                let name = provider.result_name();
-                let module = guard.container.scopes.name(key.scope);
-                let previous = guard.container.enter_scope(key.scope);
-                let fut = provider.construct(guard.container);
-                guard.container.leave_scope(previous);
-                futs.push((key, name, module, fut?));
-            }
-
-            let results = join_constructs(futs).await?;
-
-            for (key, built) in results {
-                guard
-                    .container
-                    .store_constructed(key.type_id, built, key.scope, key.private);
-                pending.remove(&key);
-            }
-            drop(guard);
+            self.run_wave(ready, pending).await?;
         }
 
+        if !pending.is_empty() {
+            let name = pending
+                .iter()
+                .next()
+                .map(|k| self.key_name(*k))
+                .unwrap_or("<unknown>");
+            return Err(Error::Cycle(name.to_owned()));
+        }
+        Ok(())
+    }
+
+    async fn run_wave(
+        &mut self,
+        ready: Vec<ProviderKey>,
+        pending: &mut TypeIdSet<ProviderKey>,
+    ) -> Result<()> {
+        for &key in &ready {
+            if !self.constructing.insert(key) {
+                return Err(Error::Cycle(self.key_name(key).to_owned()));
+            }
+        }
+
+        let guard = WaveGuard {
+            container: self,
+            keys: ready,
+        };
+
+        let mut futs = Vec::new();
+        let mut readies = Vec::new();
+        for &key in &guard.keys {
+            let previous = guard.container.enter_scope(key.scope);
+            let timed = tracing::enabled!(
+                target: crate::trace::TARGET,
+                tracing::Level::INFO
+            )
+            .then(std::time::Instant::now);
+            let (name, module, out) = {
+                let container = &*guard.container;
+                let provider = container
+                    .provider_at(key)
+                    .expect("pending key missing provider");
+                let name = provider.result_name();
+                let module = container.scopes.name(key.scope);
+                let out = provider.construct(container);
+                (name, module, out)
+            };
+            guard.container.leave_scope(previous);
+            match out? {
+                ConstructOut::Ready(built) => {
+                    let elapsed = timed.map(|t| t.elapsed()).unwrap_or_default();
+                    readies.push((key, name, module, built, elapsed));
+                }
+                ConstructOut::Fut(fut) => futs.push((key, name, module, fut)),
+            }
+        }
+
+        for (key, name, module, built, elapsed) in readies {
+            finish_ready(name, module, elapsed);
+            guard
+                .container
+                .store_constructed(key.type_id, built, key.scope, key.private);
+            pending.remove(&key);
+        }
+
+        let results = join_constructs(futs).await?;
+        for (key, built) in results {
+            guard
+                .container
+                .store_constructed(key.type_id, built, key.scope, key.private);
+            pending.remove(&key);
+        }
+        drop(guard);
         Ok(())
     }
 
@@ -373,11 +427,7 @@ impl Container {
 
     /// Resolve a type to the provider that would build it when seen from `from`:
     /// the nearest private provider up the scope chain, else the public one.
-    fn resolve_provider(
-        &self,
-        id: TypeId,
-        from: ScopeId,
-    ) -> Option<(ProviderKey, &Arc<dyn Provider>)> {
+    fn resolve_provider(&self, id: TypeId, from: ScopeId) -> Option<(ProviderKey, &dyn Provider)> {
         for scope in self.scopes.ancestors_from(from) {
             let key = ProviderKey {
                 type_id: id,
@@ -385,19 +435,19 @@ impl Container {
                 private: true,
             };
             if let Some(p) = self.providers.get(&key) {
-                return Some((key, p));
+                return Some((key, p.as_ref()));
             }
             if let Some(&canon) = self.private_alias.get(&(id, scope)) {
-                return self.providers.get(&canon).map(|p| (canon, p));
+                return self.providers.get(&canon).map(|p| (canon, p.as_ref()));
             }
         }
 
         let key = *self.public_index.get(&id)?;
-        self.providers.get(&key).map(|p| (key, p))
+        self.providers.get(&key).map(|p| (key, p.as_ref()))
     }
 
-    fn provider_at(&self, key: ProviderKey) -> Option<&Arc<dyn Provider>> {
-        self.providers.get(&key)
+    fn provider_at(&self, key: ProviderKey) -> Option<&dyn Provider> {
+        self.providers.get(&key).map(|p| p.as_ref())
     }
 
     fn missing_provider(&self, name: &'static str, from: ScopeId) -> Error {
@@ -473,7 +523,7 @@ impl Container {
     /// never be resolved and a typo in its signature would go unnoticed until
     /// some later change happened to pull it into the graph.
     pub(crate) fn validate(
-        &self,
+        &mut self,
         invoker_deps: &[(ScopeId, &[(TypeId, &'static str)])],
     ) -> Result<()> {
         for &key in &self.provider_order {
@@ -504,7 +554,30 @@ impl Container {
             }
         }
 
-        self.detect_cycles()
+        self.detect_cycles()?;
+        self.freeze_layers()
+    }
+
+    fn freeze_layers(&mut self) -> Result<()> {
+        let mut pending: TypeIdSet<ProviderKey> = self.provider_order.iter().copied().collect();
+        let mut layers = Vec::new();
+        while !pending.is_empty() {
+            let ready = self.ready_wave(&pending);
+            if ready.is_empty() {
+                let name = pending
+                    .iter()
+                    .next()
+                    .map(|k| self.key_name(*k))
+                    .unwrap_or("<unknown>");
+                return Err(Error::Cycle(name.to_owned()));
+            }
+            for key in &ready {
+                pending.remove(key);
+            }
+            layers.push(ready);
+        }
+        self.layers = layers;
+        Ok(())
     }
 
     fn can_resolve(&self, id: TypeId, from: ScopeId) -> bool {
@@ -604,15 +677,83 @@ async fn join_constructs(
             Ok(vec![(key, run_construct(name, module, fut).await?)])
         }
         _ => {
-            let boxed = futs
+            let items = futs
                 .into_iter()
-                .map(|(key, name, module, fut)| {
-                    let traced: ConstructFuture =
-                        Box::pin(async move { run_construct(name, module, fut).await });
-                    (key, traced)
-                })
+                .map(|(key, name, module, fut)| (key, TracedConstruct::new(name, module, fut)))
                 .collect();
-            try_join_all(boxed).await
+            try_join_all(items).await
+        }
+    }
+}
+
+fn finish_ready(name: &'static str, module: &'static str, elapsed: std::time::Duration) {
+    crate::trace::before_run(name, module);
+    crate::trace::run_ok(name, module, elapsed);
+}
+
+struct TracedConstruct {
+    name: &'static str,
+    module: &'static str,
+    fut: ConstructFuture,
+    timed: Option<std::time::Instant>,
+    began: bool,
+    finished: bool,
+}
+
+impl TracedConstruct {
+    fn new(name: &'static str, module: &'static str, fut: ConstructFuture) -> Self {
+        Self {
+            name,
+            module,
+            fut,
+            timed: None,
+            began: false,
+            finished: false,
+        }
+    }
+}
+
+impl std::future::Future for TracedConstruct {
+    type Output = Result<Constructed>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        if !this.began {
+            this.began = true;
+            crate::trace::before_run(this.name, this.module);
+            if tracing::enabled!(target: crate::trace::TARGET, tracing::Level::INFO) {
+                this.timed = Some(std::time::Instant::now());
+            }
+        }
+        match this.fut.as_mut().poll(cx) {
+            std::task::Poll::Ready(Ok(built)) => {
+                this.finished = true;
+                crate::trace::run_ok(
+                    this.name,
+                    this.module,
+                    this.timed
+                        .map(|t| t.elapsed())
+                        .unwrap_or(std::time::Duration::ZERO),
+                );
+                std::task::Poll::Ready(Ok(built))
+            }
+            std::task::Poll::Ready(Err(err)) => {
+                this.finished = true;
+                crate::trace::run_err(this.name, this.module, &err);
+                std::task::Poll::Ready(Err(err))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl Drop for TracedConstruct {
+    fn drop(&mut self) {
+        if self.began && !self.finished {
+            crate::trace::run_cancelled(self.name, self.module);
         }
     }
 }
@@ -622,41 +763,7 @@ async fn run_construct(
     module: &'static str,
     fut: ConstructFuture,
 ) -> Result<Constructed> {
-    use std::time::Instant;
-
-    struct CancelGuard {
-        name: &'static str,
-        module: &'static str,
-        finished: bool,
-    }
-
-    impl Drop for CancelGuard {
-        fn drop(&mut self) {
-            if !self.finished {
-                crate::trace::run_cancelled(self.name, self.module);
-            }
-        }
-    }
-
-    crate::trace::before_run(name, module);
-    let mut guard = CancelGuard {
-        name,
-        module,
-        finished: false,
-    };
-    let started = Instant::now();
-    match fut.await {
-        Ok(built) => {
-            guard.finished = true;
-            crate::trace::run_ok(name, module, started.elapsed());
-            Ok(built)
-        }
-        Err(err) => {
-            guard.finished = true;
-            crate::trace::run_err(name, module, &err);
-            Err(err)
-        }
-    }
+    TracedConstruct::new(name, module, fut).await
 }
 
 fn downcast_clone<T: Clone + Send + Sync + 'static>(value: &DynAny) -> Result<T> {
@@ -686,9 +793,9 @@ mod tests {
     #[test]
     fn public_index_rejects_duplicate() {
         let mut c = Container::new();
-        let p = Arc::new((|| 1u32).into_provider());
+        let p = Box::new((|| 1u32).into_provider());
         c.insert_provider(p, ScopeId::ROOT, false).unwrap();
-        let p2 = Arc::new((|| 2u32).into_provider());
+        let p2 = Box::new((|| 2u32).into_provider());
         let err = c.insert_provider(p2, ScopeId::ROOT, false).unwrap_err();
         assert!(format!("{err}").contains("already provided"));
     }

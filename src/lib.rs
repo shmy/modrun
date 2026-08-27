@@ -147,6 +147,7 @@
 mod app;
 mod banner;
 mod container;
+mod deps;
 mod error;
 mod future;
 mod invoke;

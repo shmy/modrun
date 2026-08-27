@@ -6,6 +6,7 @@ use crate::error::Result;
 
 use crate::app::BuildState;
 use crate::container::Container;
+use crate::deps::DepList;
 use crate::error::user_invoke_err;
 use crate::future::BoxFuture;
 use crate::option::ModOption;
@@ -25,6 +26,7 @@ pub(crate) fn invoke_dyn(invoker: DynInvoker) -> Box<dyn ModOption> {
 pub(crate) trait Invoker: Send {
     fn name(&self) -> &'static str;
     fn dep_types(&self) -> &[(TypeId, &'static str)];
+    fn dep_list(&self) -> DepList;
     /// Consume the invoker and run it once.
     fn call<'a>(self: Box<Self>, container: &'a mut Container) -> BoxFuture<'a, Result<()>>;
 }
@@ -95,6 +97,10 @@ impl DynInvoker {
         self.inner.dep_types()
     }
 
+    pub(crate) fn dep_list(&self) -> DepList {
+        self.inner.dep_list()
+    }
+
     pub(crate) fn call<'a>(self, container: &'a mut Container) -> BoxFuture<'a, Result<()>> {
         self.inner.call(container)
     }
@@ -120,6 +126,10 @@ macro_rules! impl_invoke_zero {
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
                 &[]
+            }
+
+            fn dep_list(&self) -> DepList {
+                DepList::empty()
             }
 
             fn call<'a>(
@@ -151,6 +161,10 @@ macro_rules! impl_invoke_zero {
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
                 &[]
+            }
+
+            fn dep_list(&self) -> DepList {
+                DepList::empty()
             }
 
             fn call<'a>(
@@ -200,7 +214,7 @@ macro_rules! impl_invoke_fn {
         pub struct $marker <Out, $($A),+>(PhantomData<fn() -> (Out, $($A,)+)>);
 
         struct $ok<FuncTy, $($A,)+> {
-            deps: Vec<(TypeId, &'static str)>,
+            deps: DepList,
             func: Option<FuncTy>,
             name: &'static str,
             _args: PhantomData<fn($($A),+)>,
@@ -216,7 +230,11 @@ macro_rules! impl_invoke_fn {
             }
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
-                &self.deps
+                self.deps.as_slice()
+            }
+
+            fn dep_list(&self) -> DepList {
+                self.deps
             }
 
             fn call<'a>(
@@ -224,9 +242,9 @@ macro_rules! impl_invoke_fn {
                 container: &'a mut Container,
             ) -> BoxFuture<'a, Result<()>> {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = std::mem::take(&mut self.deps);
+                let deps = self.deps;
                 Box::pin(async move {
-                    container.ensure_built(&deps).await?;
+                    container.ensure_built(deps.as_slice()).await?;
                     func(
                         $(container.get::<$A>()?,)+
                     );
@@ -236,7 +254,7 @@ macro_rules! impl_invoke_fn {
         }
 
         struct $fallible<FuncTy, ErrTy, $($A,)+> {
-            deps: Vec<(TypeId, &'static str)>,
+            deps: DepList,
             func: Option<FuncTy>,
             name: &'static str,
             _args: PhantomData<(ErrTy, fn($($A),+))>,
@@ -253,7 +271,11 @@ macro_rules! impl_invoke_fn {
             }
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
-                &self.deps
+                self.deps.as_slice()
+            }
+
+            fn dep_list(&self) -> DepList {
+                self.deps
             }
 
             fn call<'a>(
@@ -261,9 +283,9 @@ macro_rules! impl_invoke_fn {
                 container: &'a mut Container,
             ) -> BoxFuture<'a, Result<()>> {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = std::mem::take(&mut self.deps);
+                let deps = self.deps;
                 Box::pin(async move {
-                    container.ensure_built(&deps).await?;
+                    container.ensure_built(deps.as_slice()).await?;
                     func(
                         $(container.get::<$A>()?,)+
                     )
@@ -280,7 +302,7 @@ macro_rules! impl_invoke_fn {
             fn into_invoke(self) -> DynInvoker {
                 DynInvoker {
                     inner: Box::new($ok {
-                        deps: vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                        deps: DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                         func: Some(self),
                         name: type_name::<Func>(),
                         _args: PhantomData,
@@ -298,7 +320,7 @@ macro_rules! impl_invoke_fn {
             fn into_invoke(self) -> DynInvoker {
                 DynInvoker {
                     inner: Box::new($fallible {
-                        deps: vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                        deps: DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                         func: Some(self),
                         name: type_name::<Func>(),
                         _args: PhantomData,
@@ -359,6 +381,10 @@ macro_rules! impl_async_invoke_zero {
                 &[]
             }
 
+            fn dep_list(&self) -> DepList {
+                DepList::empty()
+            }
+
             fn call<'a>(
                 mut self: Box<Self>,
                 _container: &'a mut Container,
@@ -389,6 +415,10 @@ macro_rules! impl_async_invoke_zero {
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
                 &[]
+            }
+
+            fn dep_list(&self) -> DepList {
+                DepList::empty()
             }
 
             fn call<'a>(
@@ -440,7 +470,7 @@ macro_rules! impl_async_invoke_fn {
         pub struct $marker <Out, $($A),+>(PhantomData<fn() -> (Out, $($A,)+)>);
 
         struct $ok<FuncTy, $($A,)+> {
-            deps: Vec<(TypeId, &'static str)>,
+            deps: DepList,
             func: Option<FuncTy>,
             name: &'static str,
             _args: PhantomData<fn($($A),+)>,
@@ -457,7 +487,11 @@ macro_rules! impl_async_invoke_fn {
             }
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
-                &self.deps
+                self.deps.as_slice()
+            }
+
+            fn dep_list(&self) -> DepList {
+                self.deps
             }
 
             fn call<'a>(
@@ -465,9 +499,9 @@ macro_rules! impl_async_invoke_fn {
                 container: &'a mut Container,
             ) -> BoxFuture<'a, Result<()>> {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = std::mem::take(&mut self.deps);
+                let deps = self.deps;
                 Box::pin(async move {
-                    container.ensure_built(&deps).await?;
+                    container.ensure_built(deps.as_slice()).await?;
                     func(
                         $(container.get::<$A>()?,)+
                     )
@@ -478,7 +512,7 @@ macro_rules! impl_async_invoke_fn {
         }
 
         struct $fallible<FuncTy, ErrTy, $($A,)+> {
-            deps: Vec<(TypeId, &'static str)>,
+            deps: DepList,
             func: Option<FuncTy>,
             name: &'static str,
             _args: PhantomData<(ErrTy, fn($($A),+))>,
@@ -496,7 +530,11 @@ macro_rules! impl_async_invoke_fn {
             }
 
             fn dep_types(&self) -> &[(TypeId, &'static str)] {
-                &self.deps
+                self.deps.as_slice()
+            }
+
+            fn dep_list(&self) -> DepList {
+                self.deps
             }
 
             fn call<'a>(
@@ -504,9 +542,9 @@ macro_rules! impl_async_invoke_fn {
                 container: &'a mut Container,
             ) -> BoxFuture<'a, Result<()>> {
                 let func = self.func.take().expect("invoker called more than once");
-                let deps = std::mem::take(&mut self.deps);
+                let deps = self.deps;
                 Box::pin(async move {
-                    container.ensure_built(&deps).await?;
+                    container.ensure_built(deps.as_slice()).await?;
                     func(
                         $(container.get::<$A>()?,)+
                     )
@@ -525,7 +563,7 @@ macro_rules! impl_async_invoke_fn {
             fn into_invoke(self) -> DynInvoker {
                 DynInvoker {
                     inner: Box::new($ok {
-                        deps: vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                        deps: DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                         func: Some(self),
                         name: type_name::<Func>(),
                         _args: PhantomData,
@@ -544,7 +582,7 @@ macro_rules! impl_async_invoke_fn {
             fn into_invoke(self) -> DynInvoker {
                 DynInvoker {
                     inner: Box::new($fallible {
-                        deps: vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                        deps: DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                         func: Some(self),
                         name: type_name::<Func>(),
                         _args: PhantomData,

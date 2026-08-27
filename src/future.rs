@@ -7,29 +7,28 @@ pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Poll independent futures on the current task. The first error drops the rest
 /// (they cancel at their next `.await`) instead of aborting spawned tasks.
-pub(crate) fn try_join_all<K, T, E>(
-    items: Vec<(K, BoxFuture<'static, Result<T, E>>)>,
-) -> TryJoinAll<K, T, E>
+pub(crate) fn try_join_all<K, Fut, T, E>(items: Vec<(K, Fut)>) -> TryJoinAll<K, Fut, T, E>
 where
-    K: Unpin,
-    T: Unpin,
-    E: Unpin,
+    Fut: Future<Output = Result<T, E>> + Unpin,
 {
     TryJoinAll {
         inflight: items,
         done: Vec::new(),
+        _ty: std::marker::PhantomData,
     }
 }
 
 /// See [`try_join_all`].
-pub(crate) struct TryJoinAll<K, T, E> {
-    inflight: Vec<(K, BoxFuture<'static, Result<T, E>>)>,
+pub(crate) struct TryJoinAll<K, Fut, T, E> {
+    inflight: Vec<(K, Fut)>,
     done: Vec<(K, T)>,
+    _ty: std::marker::PhantomData<E>,
 }
 
-impl<K, T, E> Future for TryJoinAll<K, T, E>
+impl<K, Fut, T, E> Future for TryJoinAll<K, Fut, T, E>
 where
     K: Unpin,
+    Fut: Future<Output = Result<T, E>> + Unpin,
     T: Unpin,
     E: Unpin,
 {
@@ -39,7 +38,7 @@ where
         let this = self.get_mut();
         let mut i = 0;
         while i < this.inflight.len() {
-            match this.inflight[i].1.as_mut().poll(cx) {
+            match Pin::new(&mut this.inflight[i].1).poll(cx) {
                 Poll::Ready(Ok(value)) => {
                     let (key, _) = this.inflight.swap_remove(i);
                     this.done.push((key, value));

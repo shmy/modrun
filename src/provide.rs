@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use crate::app::BuildState;
-use crate::container::{ConstructFuture, Container, Provider, pack};
+use crate::container::{ConstructOut, Container, pack};
+use crate::deps::DepList;
 use crate::error::user_ctor_err;
 use crate::option::ModOption;
 
@@ -14,47 +15,82 @@ pub(crate) fn provide<M, F>(ctor: F) -> Box<dyn ModOption>
 where
     F: ProviderFn<M> + 'static,
 {
-    provide_dyn(ctor.into_provider())
+    provide_dyn_vis(ctor.into_provider(), false)
+}
+
+pub(crate) fn provide_priv<M, F>(ctor: F) -> Box<dyn ModOption>
+where
+    F: ProviderFn<M> + 'static,
+{
+    provide_dyn_vis(ctor.into_provider(), true)
 }
 
 pub(crate) fn provide_result<M, F>(ctor: F) -> Box<dyn ModOption>
 where
     F: FallibleProviderFn<M> + 'static,
 {
-    provide_dyn(ctor.into_provider())
+    provide_dyn_vis(ctor.into_provider(), false)
+}
+
+pub(crate) fn provide_result_priv<M, F>(ctor: F) -> Box<dyn ModOption>
+where
+    F: FallibleProviderFn<M> + 'static,
+{
+    provide_dyn_vis(ctor.into_provider(), true)
 }
 
 pub(crate) fn provide_async<M, F>(ctor: F) -> Box<dyn ModOption>
 where
     F: AsyncProviderFn<M> + 'static,
 {
-    provide_dyn(ctor.into_provider())
+    provide_dyn_vis(ctor.into_provider(), false)
+}
+
+pub(crate) fn provide_async_priv<M, F>(ctor: F) -> Box<dyn ModOption>
+where
+    F: AsyncProviderFn<M> + 'static,
+{
+    provide_dyn_vis(ctor.into_provider(), true)
 }
 
 pub(crate) fn provide_result_async<M, F>(ctor: F) -> Box<dyn ModOption>
 where
     F: FallibleAsyncProviderFn<M> + 'static,
 {
-    provide_dyn(ctor.into_provider())
+    provide_dyn_vis(ctor.into_provider(), false)
+}
+
+pub(crate) fn provide_result_async_priv<M, F>(ctor: F) -> Box<dyn ModOption>
+where
+    F: FallibleAsyncProviderFn<M> + 'static,
+{
+    provide_dyn_vis(ctor.into_provider(), true)
 }
 
 pub(crate) fn provide_dyn(provider: DynProvider) -> Box<dyn ModOption> {
-    Box::new(ProvideOption {
-        provider: Arc::new(provider),
-    })
+    provide_dyn_vis(provider, false)
+}
+
+pub(crate) fn provide_dyn_priv(provider: DynProvider) -> Box<dyn ModOption> {
+    provide_dyn_vis(provider, true)
+}
+
+fn provide_dyn_vis(provider: DynProvider, private: bool) -> Box<dyn ModOption> {
+    Box::new(ProvideOption { provider, private })
 }
 
 struct ProvideOption {
-    provider: Arc<dyn Provider>,
+    provider: DynProvider,
+    private: bool,
 }
 
 impl ModOption for ProvideOption {
     fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
         let type_name = self.provider.result_name();
-        let private = app.private_mode;
+        let private = self.private;
         let scope = app.current_scope;
         app.container
-            .insert_provider(self.provider, scope, private)?;
+            .insert_provider(Box::new(self.provider), scope, private)?;
         crate::trace::provided(type_name, app.container.scopes().name(scope), private);
         Ok(())
     }
@@ -115,7 +151,7 @@ pub trait FallibleAsyncProviderFn<Marker>: Sized {
     fn into_provider(self) -> DynProvider;
 }
 
-type ConstructFn = Box<dyn Fn(&Container) -> Result<ConstructFuture> + Send + Sync>;
+type ConstructFn = Box<dyn Fn(&Container) -> Result<ConstructOut> + Send + Sync>;
 
 /// A constructor with its signature erased, ready to be registered via
 /// [`ModrunBuilder::provide_dyn`](crate::ModrunBuilder::provide_dyn).
@@ -123,7 +159,7 @@ pub struct DynProvider {
     result_type: TypeId,
     result_name: &'static str,
     alias_types: [TypeId; 1],
-    deps: Vec<(TypeId, &'static str)>,
+    deps: DepList,
     construct: ConstructFn,
 }
 
@@ -133,7 +169,12 @@ impl std::fmt::Debug for DynProvider {
             .field("result", &self.result_name)
             .field(
                 "deps",
-                &self.deps.iter().map(|(_, n)| n).collect::<Vec<_>>(),
+                &self
+                    .deps
+                    .as_slice()
+                    .iter()
+                    .map(|(_, n)| n)
+                    .collect::<Vec<_>>(),
             )
             .finish_non_exhaustive()
     }
@@ -155,11 +196,11 @@ impl DynProvider {
     /// Dependency types this provider will resolve.
     #[must_use]
     pub fn dep_types(&self) -> &[(TypeId, &'static str)] {
-        &self.deps
+        self.deps.as_slice()
     }
 }
 
-impl Provider for DynProvider {
+impl crate::container::Provider for DynProvider {
     fn result_type(&self) -> TypeId {
         self.result_type
     }
@@ -173,18 +214,15 @@ impl Provider for DynProvider {
     }
 
     fn dep_types(&self) -> &[(TypeId, &'static str)] {
-        &self.deps
+        self.deps.as_slice()
     }
 
-    fn construct(&self, container: &Container) -> Result<ConstructFuture> {
+    fn construct(&self, container: &Container) -> Result<ConstructOut> {
         (self.construct)(container)
     }
 }
 
-fn dyn_for<T: Send + Sync + 'static>(
-    deps: Vec<(TypeId, &'static str)>,
-    construct: ConstructFn,
-) -> DynProvider {
+fn dyn_for<T: Send + Sync + 'static>(deps: DepList, construct: ConstructFn) -> DynProvider {
     DynProvider {
         result_type: TypeId::of::<T>(),
         result_name: type_name::<T>(),
@@ -194,8 +232,8 @@ fn dyn_for<T: Send + Sync + 'static>(
     }
 }
 
-fn ready_packed<T: Send + Sync + 'static>(value: T) -> ConstructFuture {
-    Box::pin(std::future::ready(Ok(pack(value))))
+fn ready_packed<T: Send + Sync + 'static>(value: T) -> ConstructOut {
+    ConstructOut::Ready(pack(value))
 }
 
 fn ctor_failed<T: ?Sized>(err: impl Into<crate::error::BoxError>) -> crate::error::Error {
@@ -218,7 +256,7 @@ macro_rules! impl_use_provide_result_instead {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<std::result::Result<T, ErrTy>>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)*],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
                     Box::new(move |_container: &Container| {
                         let value = (self)($(_container.get::<$A>()?,)*);
                         Ok(ready_packed(value))
@@ -243,10 +281,12 @@ macro_rules! impl_use_provide_result_async_instead {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<std::result::Result<T, ErrTy>>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)*],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
                     Box::new(move |_container: &Container| {
                         let future = (self)($(_container.get::<$A>()?,)*);
-                        Ok(Box::pin(async move { Ok(pack(future.await)) }))
+                        Ok(ConstructOut::Fut(Box::pin(async move {
+                            Ok(pack(future.await))
+                        })))
                     }),
                 )
             }
@@ -286,7 +326,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
-                    vec![],
+                    DepList::empty(),
                     Box::new(move |_container: &Container| Ok(ready_packed((self)()))),
                 )
             }
@@ -300,7 +340,7 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
-                    vec![],
+                    DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let value = (self)().map_err(ctor_failed::<T>)?;
                         Ok(ready_packed(value))
@@ -317,10 +357,12 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
-                    vec![],
+                    DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let future = (self)();
-                        Ok(Box::pin(async move { Ok(pack(future.await)) }))
+                        Ok(ConstructOut::Fut(Box::pin(async move {
+                            Ok(pack(future.await))
+                        })))
                     }),
                 )
             }
@@ -335,13 +377,13 @@ macro_rules! impl_provider_fn_zero {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
-                    vec![],
+                    DepList::empty(),
                     Box::new(move |_container: &Container| {
                         let future = (self)();
-                        Ok(Box::pin(async move {
+                        Ok(ConstructOut::Fut(Box::pin(async move {
                             let value = future.await.map_err(ctor_failed::<T>)?;
                             Ok(pack(value))
-                        }))
+                        })))
                     }),
                 )
             }
@@ -387,7 +429,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let value = (self)(
                             $(container.get::<$A>()?,)+
@@ -407,7 +449,7 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let value = (self)(
                             $(container.get::<$A>()?,)+
@@ -428,12 +470,14 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<Out>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let future = (self)(
                             $(container.get::<$A>()?,)+
                         );
-                        Ok(Box::pin(async move { Ok(pack(future.await)) }))
+                        Ok(ConstructOut::Fut(Box::pin(async move {
+                            Ok(pack(future.await))
+                        })))
                     }),
                 )
             }
@@ -450,15 +494,15 @@ macro_rules! impl_provider_fn {
         {
             fn into_provider(self) -> DynProvider {
                 dyn_for::<T>(
-                    vec![$((TypeId::of::<$A>(), type_name::<$A>()),)+],
+                    DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
                     Box::new(move |container: &Container| {
                         let future = (self)(
                             $(container.get::<$A>()?,)+
                         );
-                        Ok(Box::pin(async move {
+                        Ok(ConstructOut::Fut(Box::pin(async move {
                             let value = future.await.map_err(ctor_failed::<T>)?;
                             Ok(pack(value))
-                        }))
+                        })))
                     }),
                 )
             }

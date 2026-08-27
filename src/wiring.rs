@@ -192,7 +192,7 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::ProviderFn<M> + 'static,
             {
-                self.push_option($crate::module::private($crate::provide::provide(ctor)));
+                self.push_option($crate::provide::provide_priv(ctor));
                 self
             }
 
@@ -211,9 +211,7 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::FallibleProviderFn<M> + 'static,
             {
-                self.push_option($crate::module::private($crate::provide::provide_result(
-                    ctor,
-                )));
+                self.push_option($crate::provide::provide_result_priv(ctor));
                 self
             }
 
@@ -232,9 +230,7 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::AsyncProviderFn<M> + 'static,
             {
-                self.push_option($crate::module::private($crate::provide::provide_async(
-                    ctor,
-                )));
+                self.push_option($crate::provide::provide_async_priv(ctor));
                 self
             }
 
@@ -253,9 +249,7 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
             {
-                self.push_option($crate::module::private(
-                    $crate::provide::provide_result_async(ctor),
-                ));
+                self.push_option($crate::provide::provide_result_async_priv(ctor));
                 self
             }
 
@@ -268,9 +262,7 @@ macro_rules! impl_private_wiring_methods {
 
             /// [`provide_dyn_private`](Self::provide_dyn_private) for `&mut self`.
             pub fn provide_dyn_private_mut(&mut self, provider: $crate::DynProvider) -> &mut Self {
-                self.push_option($crate::module::private($crate::provide::provide_dyn(
-                    provider,
-                )));
+                self.push_option($crate::provide::provide_dyn_priv(provider));
                 self
             }
 
@@ -283,7 +275,7 @@ macro_rules! impl_private_wiring_methods {
 
             /// [`supply_private`](Self::supply_private) for `&mut self`.
             pub fn supply_private_mut<T: Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
-                self.push_option($crate::module::private($crate::supply::supply(value)));
+                self.push_option($crate::supply::supply_priv(value));
                 self
             }
         }

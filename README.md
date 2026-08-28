@@ -120,8 +120,8 @@ failure stays on [`std::error::Error::source`](std::error::Error::source). There
 [`From<std::io::Error>`](std::convert::From); wrap I/O with [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)
 (`bind(addr).await.map_err(|e| Error::io(format!("bind {addr}"), e))?`).
 
-Give hooks a [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
-for logs. Constructors and invokers accept at most eight parameters; group extra
+Override [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name) from the default
+`"unnamed"` for clearer logs and errors. Constructors and invokers accept at most eight parameters; group extra
 dependencies in a struct rather than stretching arity.
 
 Hook futures must be cancellation-safe. A start/stop timeout drops the in-progress
@@ -408,8 +408,9 @@ Graph problems fail before constructors run. Typical `Display` text:
 
 Constructor and hook failures keep the original error on
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source).
-Named hooks include [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
-in the display (`task` always has one). Several OnStop failures become [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html).
+Every hook has a [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+in logs and errors (default `"unnamed"`; [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) sets its own).
+Several OnStop failures become [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html).
 If unwind fails after an earlier phase error, both are retained on
 [`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html).
 

@@ -23,8 +23,8 @@ type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync
 /// }
 ///
 /// impl Hook for Server {
-///     fn name(&self) -> Option<&'static str> {
-///         Some("http")
+///     fn name(&self) -> &'static str {
+///         "http"
 ///     }
 ///
 ///     async fn on_start(&mut self) -> Result<()> {
@@ -90,9 +90,12 @@ type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync
 /// For one-off stop callbacks, [`hook().on_stop(...)`](crate::hook) already
 /// behaves as stop-only.
 pub trait Hook: Send + 'static {
-    /// Label used in framework logs. Does not affect execution order.
-    fn name(&self) -> Option<&'static str> {
-        None
+    /// Label used in framework logs and hook failure messages. Does not affect
+    /// execution order. Defaults to `"unnamed"`; override for clearer diagnostics.
+    /// Avoid `"unnamed"` as an explicit override (indistinguishable from the
+    /// default) and avoid empty strings.
+    fn name(&self) -> &'static str {
+        "unnamed"
     }
 
     /// Whether this hook runs an OnStart phase.
@@ -130,9 +133,8 @@ pub trait Hook: Send + 'static {
 
 /// Ad-hoc start/stop callbacks. Prefer implementing [`Hook`] when the two
 /// phases share state.
-#[derive(Default)]
 pub struct HookFn {
-    name: Option<&'static str>,
+    name: &'static str,
     on_start: Option<Callback>,
     on_stop: Option<StopCallback>,
 }
@@ -153,18 +155,32 @@ impl std::fmt::Debug for HookFn {
     }
 }
 
+impl Default for HookFn {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HookFn {
     /// An empty hook. Attach callbacks with
     /// [`on_start`](Self::on_start) and [`on_stop`](Self::on_stop).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            name: "unnamed",
+            on_start: None,
+            on_stop: None,
+        }
     }
 
     /// Label used in framework logs. Does not affect execution order.
+    ///
+    /// Must not be empty. Using `"unnamed"` is discouraged — it is the default
+    /// when this method is not called.
     #[must_use]
     pub fn name(mut self, name: &'static str) -> Self {
-        self.name = Some(name);
+        debug_assert!(!name.is_empty(), "hook name must not be empty");
+        self.name = name;
         self
     }
 
@@ -205,7 +221,7 @@ impl HookFn {
 }
 
 impl Hook for HookFn {
-    fn name(&self) -> Option<&'static str> {
+    fn name(&self) -> &'static str {
         self.name
     }
 
@@ -264,19 +280,19 @@ impl<H: Hook> ErasedHook for H {
 }
 
 struct HookEntry {
-    name: Option<&'static str>,
+    name: &'static str,
     inner: Option<Box<dyn ErasedHook>>,
 }
 
 struct InflightHook {
     lifecycle: Option<Lifecycle>,
     idx: usize,
-    name: Option<&'static str>,
+    name: &'static str,
     finished: bool,
 }
 
 impl InflightHook {
-    fn start(lifecycle: Lifecycle, idx: usize, name: Option<&'static str>) -> Self {
+    fn start(lifecycle: Lifecycle, idx: usize, name: &'static str) -> Self {
         crate::trace::on_start_executing(idx, name);
         Self {
             lifecycle: Some(lifecycle),
@@ -317,7 +333,7 @@ impl Drop for InflightHook {
 struct StopGuard {
     lifecycle: Lifecycle,
     idx: usize,
-    name: Option<&'static str>,
+    name: &'static str,
     hook: Option<Box<dyn ErasedHook>>,
     finished: bool,
 }
@@ -326,7 +342,7 @@ impl StopGuard {
     fn new(
         lifecycle: Lifecycle,
         idx: usize,
-        name: Option<&'static str>,
+        name: &'static str,
         hook: Box<dyn ErasedHook>,
     ) -> Self {
         crate::trace::on_stop_executing(idx, name);
@@ -451,6 +467,7 @@ impl Lifecycle {
     /// begun — appended hooks would never run.
     pub fn append<H: Hook>(&self, mut hook: H) -> Result<()> {
         hook.attach_shutdown(self.shutdown.clone());
+        debug_assert!(!hook.name().is_empty(), "hook name must not be empty");
         let mut state = self.state();
         match state.phase {
             Phase::Registering | Phase::Starting => {
@@ -614,7 +631,7 @@ impl Lifecycle {
     /// it. If that future is cancelled, [`StopGuard`] writes the hook back so a
     /// follow-up unwind can retry it; a timeout abandons the in-flight hook without
     /// a second budget (see caller).
-    fn take_next_stop(&self) -> Option<(usize, Option<&'static str>, Box<dyn ErasedHook>)> {
+    fn take_next_stop(&self) -> Option<(usize, &'static str, Box<dyn ErasedHook>)> {
         let mut state = self.state();
         loop {
             if state.started == 0 {

@@ -285,8 +285,8 @@ where
     F: FnOnce(Stopped) -> Fut + Send + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
-    fn name(&self) -> Option<&'static str> {
-        Some(self.live.name)
+    fn name(&self) -> &'static str {
+        self.live.name
     }
 
     fn attach_shutdown(&mut self, shutdown: Shutdowner) {
@@ -314,8 +314,8 @@ where
     R: FnOnce(T, Stopped) -> RF + Send + 'static,
     RF: Future<Output = Result<()>> + Send + 'static,
 {
-    fn name(&self) -> Option<&'static str> {
-        Some(self.live.name)
+    fn name(&self) -> &'static str {
+        self.live.name
     }
 
     fn attach_shutdown(&mut self, shutdown: Shutdowner) {

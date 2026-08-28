@@ -144,13 +144,14 @@ pub enum Error {
     /// An application hook returned this failure.
     ///
     /// Prefer [`Error::hook`] rather than constructing this variant directly.
-    /// [`crate::Lifecycle`] fills in [`Self::Hook::name`] when the hook has one
-    /// and the failure is already this variant. [`Error::Io`] and other
-    /// variants are left unchanged.
+    /// [`crate::Lifecycle`] overwrites [`Self::Hook::name`] with the registering
+    /// hook's [`Hook::name`](crate::Hook::name) when start/stop returns this
+    /// variant. [`Error::Io`] and other variants are left unchanged.
     #[error("{}", hook_failed_message(.name, .source))]
     Hook {
-        /// [`crate::Hook::name`] when known.
-        name: Option<&'static str>,
+        /// [`crate::Hook::name`]; defaults to `"unnamed"` from [`Error::hook`]
+        /// until [`crate::Lifecycle`] attaches the registering hook's name.
+        name: &'static str,
         /// The user error from the hook.
         #[source]
         source: BoxError,
@@ -217,11 +218,11 @@ impl Error {
     ///
     /// Accepts anything convertible to [`BoxError`], including `&str`, `String`,
     /// [`std::io::Error`], and types that implement [`std::error::Error`].
-    /// [`crate::Lifecycle`] attaches [`Hook::name`](crate::Hook::name) when the
-    /// hook has one and the failure is already [`Error::Hook`].
+    /// [`crate::Lifecycle`] overwrites [`Self::Hook::name`] with the registering
+    /// hook's [`Hook::name`](crate::Hook::name) when start/stop returns this variant.
     pub fn hook(err: impl Into<BoxError>) -> Self {
         Self::Hook {
-            name: None,
+            name: "unnamed",
             source: err.into(),
         }
     }
@@ -229,13 +230,10 @@ impl Error {
     /// Attach a hook name when the failure is already [`Error::Hook`].
     /// Other variants (for example [`Error::Io`]) are left unchanged so
     /// callers can still match on them.
-    pub(crate) fn with_hook_name(self, name: Option<&'static str>) -> Self {
+    pub(crate) fn with_hook_name(self, hook_name: &'static str) -> Self {
         match self {
-            Self::Hook {
-                source,
-                name: existing,
-            } => Self::Hook {
-                name: name.or(existing),
+            Self::Hook { source, .. } => Self::Hook {
+                name: hook_name,
                 source,
             },
             other => other,
@@ -291,11 +289,8 @@ pub(crate) fn user_invoke_err(name: &'static str, err: impl Into<BoxError>) -> E
     Error::invoker_failed(name, err)
 }
 
-fn hook_failed_message(name: &Option<&'static str>, source: &BoxError) -> String {
-    match name {
-        Some(name) => format!("hook '{name}' failed: {source}"),
-        None => format!("hook failed: {source}"),
-    }
+fn hook_failed_message(name: &'static str, source: &BoxError) -> String {
+    format!("hook '{name}' failed: {source}")
 }
 
 /// Aggregate multiple hook failures into a single error.
@@ -412,14 +407,14 @@ mod tests {
         let err = Error::hook("boom");
         let msg = err.to_string();
         assert!(msg.contains("boom"), "unexpected: {msg}");
-        assert!(msg.contains("hook failed"), "unexpected: {msg}");
+        assert!(msg.contains("hook 'unnamed' failed"), "unexpected: {msg}");
     }
 
     #[test]
     fn with_hook_name_labels_unnamed_hook() {
-        let err = Error::hook("boom").with_hook_name(Some("http"));
+        let err = Error::hook("boom").with_hook_name("http");
         match &err {
-            Error::Hook { name, .. } => assert_eq!(*name, Some("http")),
+            Error::Hook { name, .. } => assert_eq!(*name, "http"),
             other => panic!("expected Hook, got {other}"),
         }
         let msg = err.to_string();
@@ -429,8 +424,8 @@ mod tests {
 
     #[test]
     fn with_hook_name_leaves_io_unchanged() {
-        let err = Error::io("bind", std::io::Error::other("addr in use"))
-            .with_hook_name(Some("http.serve"));
+        let err =
+            Error::io("bind", std::io::Error::other("addr in use")).with_hook_name("http.serve");
         match err {
             Error::Io { context, .. } => assert_eq!(context, "bind"),
             other => panic!("expected Io, got {other}"),

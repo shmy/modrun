@@ -82,8 +82,8 @@ Hook 和构造函数错误使用 [`Error`](https://docs.rs/modrun/latest/modrun/
 [`Error::hook`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.hook) 或
 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io)，这样原始失败会留在 [`std::error::Error::source`](std::error::Error::source) 上。没有 `From<std::io::Error>`，I/O 要用 [`Error::io`](https://docs.rs/modrun/latest/modrun/enum.Error.html#method.io) 包一层（`bind(addr).await.map_err(|e| Error::io(format!("bind {addr}"), e))?`）。
 
-给 hook 一个 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
-用于日志。构造函数和 invoker 最多八个参数；多出来的依赖收进一个结构体，不要把参数个数拉长。
+用 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+覆盖默认的 `"unnamed"`，让日志和错误信息更清晰。构造函数和 invoker 最多八个参数；多出来的依赖收进一个结构体，不要把参数个数拉长。
 
 Hook 的 future 必须是 cancellation-safe 的。start/stop 超时会 drop 正在进行的 future，但 **不能** 取消 `tokio::spawn` 出去的脱离任务。Worker 用 [`task()`](https://docs.rs/modrun/latest/modrun/fn.task.html)；bind/listen 必须在 OnStart 里完成时用 [`task_with()`](https://docs.rs/modrun/latest/modrun/fn.task_with.html)（见 axum 示例）。两者都会在 OnStop 时打出 [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html)、join，并在 hook 中途被 drop 时 abort。后台工作在 start 已经成功之后返回 `Err` 或 panic 时会自动请求 shutdown，这样 `run()` 不会一直等信号。用 `tokio::spawn` 自己拉起的任务仍须调用
 [`Shutdowner::shutdown`](https://docs.rs/modrun/latest/modrun/struct.Shutdowner.html#method.shutdown)。
@@ -294,8 +294,9 @@ hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默�
 
 构造函数和 hook 失败会把原始错误留在
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source)。
-有名字的 hook 会把 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
-写进 Display（`task` 总有名字）。多个 OnStop 失败会聚合成 [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html)。
+每个 hook 在日志和错误里都有 [`Hook::name`](https://docs.rs/modrun/latest/modrun/trait.Hook.html#method.name)
+（默认 `"unnamed"`；[`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) 会设自己的名字）。
+多个 OnStop 失败会聚合成 [`MultipleStopError`](https://docs.rs/modrun/latest/modrun/struct.MultipleStopError.html)。
 若更早阶段已经失败、unwind 又失败，两者都保留在
 [`Error::CleanupAfterFailure`](https://docs.rs/modrun/latest/modrun/enum.Error.html) 上。
 

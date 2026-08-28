@@ -129,6 +129,31 @@ async fn named_start_hook_error_includes_name() {
 }
 
 #[tokio::test]
+async fn named_stop_hook_error_includes_name() {
+    fn boot(lc: Lifecycle) {
+        lc.append(
+            hook()
+                .name("metrics")
+                .on_stop(|| async { Err(Error::hook("flush failed")) }),
+        )
+        .unwrap();
+    }
+
+    let err = Modrun::builder()
+        .no_banner()
+        .invoke(boot)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("metrics"), "unexpected: {msg}");
+    assert!(msg.contains("flush failed"), "unexpected: {msg}");
+}
+
+#[tokio::test]
 async fn named_start_hook_io_stays_io() {
     fn boot(lc: Lifecycle) {
         lc.append(
@@ -1295,7 +1320,7 @@ async fn append_after_failed_start_is_stopping() {
         .unwrap_err();
     assert!(format!("{err}").contains("boom"), "unexpected: {err}");
     assert!(
-        format!("{err}").contains("hook failed"),
+        format!("{err}").contains("hook 'unnamed' failed"),
         "unexpected: {err}"
     );
 
@@ -1314,8 +1339,8 @@ async fn struct_hook_shares_start_stop_state() {
     }
 
     impl Hook for Counter {
-        fn name(&self) -> Option<&'static str> {
-            Some("counter")
+        fn name(&self) -> &'static str {
+            "counter"
         }
 
         async fn on_start(&mut self) -> modrun::Result<()> {
@@ -1508,7 +1533,7 @@ async fn on_stop_join_panic_surfaces_as_error() {
         .await
         .unwrap_err();
     let msg = format!("{err}");
-    assert!(msg.contains("hook failed"), "unexpected: {msg}");
+    assert!(msg.contains("hook 'unnamed' failed"), "unexpected: {msg}");
     assert!(
         msg.contains("panic") || msg.contains("join"),
         "unexpected: {msg}"

@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::provide::DynProvider;
 use crate::scope::ScopeId;
 
-use super::types::{ProviderKey, TypeIdMap, TypeIdSet};
+use super::types::{GroupElementKey, ProviderKey, TypeIdMap, TypeIdSet};
 use super::{Container, DynAny};
 
 impl Container {
@@ -15,11 +15,10 @@ impl Container {
             if let Some(v) = self.values_private.get(&(id, scope)) {
                 return Some(v);
             }
-            if self.providers.contains_key(&ProviderKey {
-                type_id: id,
-                scope,
-                private: true,
-            }) {
+            if self
+                .providers
+                .contains_key(&ProviderKey::singleton(id, scope, true))
+            {
                 return None;
             }
             if self.private_alias.contains_key(&(id, scope)) {
@@ -35,17 +34,18 @@ impl Container {
         from: ScopeId,
     ) -> Option<(ProviderKey, &DynProvider)> {
         for scope in self.scopes.ancestors_from(from) {
-            let key = ProviderKey {
-                type_id: id,
-                scope,
-                private: true,
-            };
+            let key = ProviderKey::singleton(id, scope, true);
             if let Some(p) = self.providers.get(&key) {
                 return Some((key, p));
             }
             if let Some(&canon) = self.private_alias.get(&(id, scope)) {
                 return self.providers.get(&canon).map(|p| (canon, p));
             }
+        }
+
+        if self.is_group_type(id) {
+            let key = self.group_virtual_key(id)?;
+            return self.providers.get(&key).map(|p| (key, p));
         }
 
         let key = *self.public_index.get(&id)?;
@@ -74,8 +74,50 @@ impl Container {
             .resolve_provider(id, from)
             .ok_or_else(|| self.missing_provider(name, from))?;
 
+        if self.group_virtual_key(id) == Some(key) {
+            return self.collect_group_pending(id, name, pending);
+        }
+
+        self.collect_provider_pending(key, provider, pending)
+    }
+
+    fn collect_group_pending(
+        &self,
+        group_type: TypeId,
+        name: &'static str,
+        pending: &mut TypeIdSet<ProviderKey>,
+    ) -> Result<()> {
+        let virtual_key = self
+            .group_virtual_key(group_type)
+            .ok_or_else(|| self.missing_provider(name, ScopeId::ROOT))?;
+        if !pending.insert(virtual_key) {
+            return Ok(());
+        }
+        let element = self
+            .group_element_type(group_type)
+            .expect("group type missing element mapping");
+        for &member_key in self
+            .group_members
+            .get(&GroupElementKey { element })
+            .into_iter()
+            .flatten()
+        {
+            let provider = self
+                .provider_at(member_key)
+                .expect("group member missing provider");
+            self.collect_provider_pending(member_key, provider, pending)?;
+        }
+        Ok(())
+    }
+
+    fn collect_provider_pending(
+        &self,
+        key: ProviderKey,
+        provider: &DynProvider,
+        pending: &mut TypeIdSet<ProviderKey>,
+    ) -> Result<()> {
         if self.constructing.contains(&key) {
-            return Err(Error::Cycle(name.to_owned()));
+            return Err(Error::Cycle(self.key_name(key).to_owned()));
         }
 
         if !pending.insert(key) {
@@ -120,8 +162,23 @@ impl Container {
             }
         }
 
+        self.validate_required_groups()?;
         self.detect_cycles()?;
         self.freeze_layers()
+    }
+
+    fn validate_required_groups(&self) -> Result<()> {
+        for (&element, &type_name) in &self.required_groups {
+            let members = self
+                .group_members
+                .get(&GroupElementKey { element })
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if members.is_empty() {
+                return Err(Error::EmptyGroup { type_name });
+            }
+        }
+        Ok(())
     }
 
     fn freeze_layers(&mut self) -> Result<()> {
@@ -143,6 +200,8 @@ impl Container {
             }
             indegree.insert(key, degree);
         }
+
+        self.add_group_virtual_edges(&mut indegree, &mut dependents);
 
         let mut ready: Vec<_> = self
             .provider_order
@@ -185,6 +244,27 @@ impl Container {
         Ok(())
     }
 
+    fn add_group_virtual_edges(
+        &self,
+        indegree: &mut TypeIdMap<ProviderKey, usize>,
+        dependents: &mut TypeIdMap<ProviderKey, Vec<ProviderKey>>,
+    ) {
+        for reg in self.group_registrations.values() {
+            let virtual_key = reg.virtual_key;
+            let members = self
+                .group_members
+                .get(&GroupElementKey {
+                    element: reg.element,
+                })
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for &member_key in members {
+                *indegree.entry(virtual_key).or_insert(0) += 1;
+                dependents.entry(member_key).or_default().push(virtual_key);
+            }
+        }
+    }
+
     fn can_resolve(&self, id: TypeId, from: ScopeId) -> bool {
         for scope in self.scopes.ancestors_from(from) {
             if self.values_private.contains_key(&(id, scope)) {
@@ -199,11 +279,10 @@ impl Container {
             if self.values_private.contains_key(&(id, scope)) {
                 return true;
             }
-            if self.providers.contains_key(&ProviderKey {
-                type_id: id,
-                scope,
-                private: true,
-            }) || self.private_alias.contains_key(&(id, scope))
+            if self
+                .providers
+                .contains_key(&ProviderKey::singleton(id, scope, true))
+                || self.private_alias.contains_key(&(id, scope))
             {
                 return false;
             }
@@ -216,6 +295,9 @@ impl Container {
         let mut on_path = TypeIdSet::default();
         let mut path = Vec::new();
         for &key in &self.provider_order {
+            if key.is_group_member() {
+                continue;
+            }
             self.visit(key, &mut done, &mut on_path, &mut path)?;
         }
         Ok(())
@@ -250,6 +332,18 @@ impl Container {
                 self.visit(dep_key, done, on_path, path)?;
             }
         }
+
+        if let Some(&element) = self.group_virtual_to_element.get(&key) {
+            for &member_key in self
+                .group_members
+                .get(&GroupElementKey { element })
+                .into_iter()
+                .flatten()
+            {
+                self.visit(member_key, done, on_path, path)?;
+            }
+        }
+
         path.pop();
         on_path.remove(&key);
         done.insert(key);

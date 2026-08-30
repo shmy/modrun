@@ -92,6 +92,11 @@ path = "examples/worker.rs"
 required-features = ["logging"]
 
 [[example]]
+name = "handlers"
+path = "examples/handlers.rs"
+required-features = ["logging"]
+
+[[example]]
 name = "swap"
 path = "examples/swap.rs"
 required-features = ["logging"]

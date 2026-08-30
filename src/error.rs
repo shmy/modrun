@@ -10,6 +10,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A required group has no members.
+    #[error("required group is empty: {type_name}")]
+    EmptyGroup {
+        /// Group type name shown in diagnostics (`Group<T>`).
+        type_name: &'static str,
+    },
+
+    /// A group member provider's result type does not match the declared element type.
+    #[error("provide_group_dyn type mismatch: expected {expected}, got {actual}")]
+    GroupMemberTypeMismatch {
+        /// Element type the caller declared.
+        expected: &'static str,
+        /// Result type reported by the erased provider.
+        actual: &'static str,
+    },
+
     /// A public type was registered more than once.
     #[error("type already provided: {0}")]
     AlreadyProvided(&'static str),
@@ -42,7 +58,8 @@ pub enum Error {
 
     /// A provider depends on something nothing registers.
     #[error(
-        "provider for {provider} in module '{module}' needs a dependency nothing provides: {dependency}"
+        "provider for {provider} in module '{module}' needs a dependency nothing provides: {dependency}{}",
+        group_registration_hint(.dependency)
     )]
     ProviderMissingDep {
         /// Provider result type.
@@ -54,7 +71,10 @@ pub enum Error {
     },
 
     /// An invoker depends on something nothing registers.
-    #[error("invoker in module '{module}' needs a dependency nothing provides: {dependency}")]
+    #[error(
+        "invoker in module '{module}' needs a dependency nothing provides: {dependency}{}",
+        group_registration_hint(.dependency)
+    )]
     InvokerMissingDep {
         /// Module that owns the invoker.
         module: &'static str,
@@ -291,6 +311,14 @@ pub(crate) fn user_invoke_err(name: &'static str, err: impl Into<BoxError>) -> E
 
 fn hook_failed_message(name: &'static str, source: &BoxError) -> String {
     format!("hook '{name}' failed: {source}")
+}
+
+fn group_registration_hint(dependency: &str) -> &'static str {
+    if dependency.contains("Group<") {
+        "; register the group with init_group, provide_group, or require_group"
+    } else {
+        ""
+    }
 }
 
 /// Aggregate multiple hook failures into a single error.

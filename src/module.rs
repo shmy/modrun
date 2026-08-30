@@ -2,7 +2,7 @@ use crate::error::Result;
 
 use crate::app::BuildState;
 use crate::option::ModOption;
-use crate::wiring::{impl_private_wiring_methods, impl_wiring_methods};
+use crate::wiring::{impl_group_wiring_methods, impl_private_wiring_methods, impl_wiring_methods};
 
 /// A named domain module.
 ///
@@ -88,6 +88,7 @@ impl Module {
 
 impl_wiring_methods!(Module);
 impl_private_wiring_methods!(Module);
+impl_group_wiring_methods!(Module);
 
 struct ModuleOption {
     name: &'static str,

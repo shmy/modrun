@@ -157,7 +157,60 @@ pub trait FallibleAsyncProviderFn<Marker>: Sized {
     fn into_provider(self) -> DynProvider;
 }
 
-type ConstructFn = Box<dyn Fn(&Container) -> Result<ConstructOut> + Send + Sync>;
+/// Extract the output type from a [`ProviderFn`] marker.
+///
+/// Used by [`ModrunBuilder::provide_group`](crate::ModrunBuilder::provide_group)
+/// and related group wiring when wrapping constructors.
+pub trait ProviderMarker {
+    /// Value produced by constructors with this marker.
+    type Output: Clone + Send + Sync + 'static;
+}
+
+macro_rules! impl_provider_marker_zero {
+    ($marker:ident) => {
+        impl<Out> ProviderMarker for $marker<Out>
+        where
+            Out: Clone + Send + Sync + 'static,
+        {
+            type Output = Out;
+        }
+    };
+}
+
+macro_rules! impl_provider_marker_fallible_zero {
+    ($marker:ident) => {
+        impl<T, ErrTy> ProviderMarker for $marker<T, ErrTy>
+        where
+            T: Clone + Send + Sync + 'static,
+        {
+            type Output = T;
+        }
+    };
+}
+
+macro_rules! impl_provider_marker_arity {
+    ($marker:ident, $($A:ident),+) => {
+        impl<Out, $($A,)+> ProviderMarker for $marker<Out, $($A,)+>
+        where
+            Out: Clone + Send + Sync + 'static,
+        {
+            type Output = Out;
+        }
+    };
+}
+
+macro_rules! impl_provider_marker_fallible_arity {
+    ($marker:ident, $($A:ident),+) => {
+        impl<T, ErrTy, $($A,)+> ProviderMarker for $marker<T, ErrTy, $($A,)+>
+        where
+            T: Clone + Send + Sync + 'static,
+        {
+            type Output = T;
+        }
+    };
+}
+
+type ConstructFn = Box<dyn Fn(&mut Container) -> Result<ConstructOut> + Send + Sync>;
 
 /// A constructor with its signature erased, ready to be registered via
 /// [`ModrunBuilder::provide_dyn`](crate::ModrunBuilder::provide_dyn).
@@ -216,9 +269,42 @@ impl DynProvider {
         &self.alias_types
     }
 
-    pub(crate) fn construct(&self, container: &Container) -> Result<ConstructOut> {
+    pub(crate) fn construct(&self, container: &mut Container) -> Result<ConstructOut> {
         (self.construct_fn)(container)
     }
+
+    pub(crate) fn new_group_virtual<T: Send + Sync + 'static>(construct_fn: ConstructFn) -> Self {
+        Self {
+            result_type: TypeId::of::<crate::Group<T>>(),
+            result_name: type_name::<crate::Group<T>>(),
+            constructor_name: "<group aggregate>",
+            alias_types: [TypeId::of::<std::sync::Arc<crate::Group<T>>>()],
+            deps: DepList::empty(),
+            construct_fn,
+        }
+    }
+}
+
+/// One-shot provider: moves `value` on first construction (used by `supply_group`).
+pub(crate) fn take_once_value_provider<T: Send + Sync + 'static>(
+    value: T,
+    constructor_name: &'static str,
+) -> DynProvider {
+    use std::sync::Mutex;
+
+    let slot = Mutex::new(Some(value));
+    dyn_for::<T>(
+        constructor_name,
+        DepList::empty(),
+        Box::new(move |_container: &mut Container| {
+            let value = slot
+                .lock()
+                .expect("take_once_value_provider mutex poisoned")
+                .take()
+                .expect("take_once_value_provider constructed more than once");
+            Ok(ready_packed(value))
+        }),
+    )
 }
 
 fn dyn_for<T: Send + Sync + 'static>(
@@ -262,7 +348,7 @@ macro_rules! impl_use_provide_result_instead {
                 dyn_for::<std::result::Result<T, ErrTy>>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
-                    Box::new(move |_container: &Container| {
+                    Box::new(move |_container: &mut Container| {
                         let value = (self)($(_container.get::<$A>()?,)*);
                         Ok(ready_packed(value))
                     }),
@@ -288,7 +374,7 @@ macro_rules! impl_use_provide_result_async_instead {
                 dyn_for::<std::result::Result<T, ErrTy>>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)*]),
-                    Box::new(move |_container: &Container| {
+                    Box::new(move |_container: &mut Container| {
                         let future = (self)($(_container.get::<$A>()?,)*);
                         Ok(ConstructOut::Fut(Box::pin(async move {
                             Ok(pack(future.await))
@@ -334,7 +420,7 @@ macro_rules! impl_provider_fn_zero {
                 dyn_for::<Out>(
                     type_name::<Func>(),
                     DepList::empty(),
-                    Box::new(move |_container: &Container| Ok(ready_packed((self)()))),
+                    Box::new(move |_container: &mut Container| Ok(ready_packed((self)()))),
                 )
             }
         }
@@ -349,7 +435,7 @@ macro_rules! impl_provider_fn_zero {
                 dyn_for::<T>(
                     type_name::<Func>(),
                     DepList::empty(),
-                    Box::new(move |_container: &Container| {
+                    Box::new(move |_container: &mut Container| {
                         let value = (self)().map_err(ctor_failed::<T>)?;
                         Ok(ready_packed(value))
                     }),
@@ -367,7 +453,7 @@ macro_rules! impl_provider_fn_zero {
                 dyn_for::<Out>(
                     type_name::<Func>(),
                     DepList::empty(),
-                    Box::new(move |_container: &Container| {
+                    Box::new(move |_container: &mut Container| {
                         let future = (self)();
                         Ok(ConstructOut::Fut(Box::pin(async move {
                             Ok(pack(future.await))
@@ -388,7 +474,7 @@ macro_rules! impl_provider_fn_zero {
                 dyn_for::<T>(
                     type_name::<Func>(),
                     DepList::empty(),
-                    Box::new(move |_container: &Container| {
+                    Box::new(move |_container: &mut Container| {
                         let future = (self)();
                         Ok(ConstructOut::Fut(Box::pin(async move {
                             let value = future.await.map_err(ctor_failed::<T>)?;
@@ -441,7 +527,7 @@ macro_rules! impl_provider_fn {
                 dyn_for::<Out>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
-                    Box::new(move |container: &Container| {
+                    Box::new(move |container: &mut Container| {
                         let value = (self)(
                             $(container.get::<$A>()?,)+
                         );
@@ -462,7 +548,7 @@ macro_rules! impl_provider_fn {
                 dyn_for::<T>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
-                    Box::new(move |container: &Container| {
+                    Box::new(move |container: &mut Container| {
                         let value = (self)(
                             $(container.get::<$A>()?,)+
                         )
@@ -484,7 +570,7 @@ macro_rules! impl_provider_fn {
                 dyn_for::<Out>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
-                    Box::new(move |container: &Container| {
+                    Box::new(move |container: &mut Container| {
                         let future = (self)(
                             $(container.get::<$A>()?,)+
                         );
@@ -509,7 +595,7 @@ macro_rules! impl_provider_fn {
                 dyn_for::<T>(
                     type_name::<Func>(),
                     DepList::from_array([$(crate::deps::dep::<$A>(),)+]),
-                    Box::new(move |container: &Container| {
+                    Box::new(move |container: &mut Container| {
                         let future = (self)(
                             $(container.get::<$A>()?,)+
                         );
@@ -532,6 +618,10 @@ impl_provider_fn_zero!(
     UseProvideResult0,
     UseProvideResultAsync0
 );
+impl_provider_marker_zero!(Provider0);
+impl_provider_marker_zero!(AsyncProvider0);
+impl_provider_marker_fallible_zero!(Fallible0);
+impl_provider_marker_fallible_zero!(AsyncFallible0);
 impl_provider_fn!(
     Provider1,
     Fallible1,
@@ -541,6 +631,10 @@ impl_provider_fn!(
     UseProvideResultAsync1,
     A
 );
+impl_provider_marker_arity!(Provider1, A);
+impl_provider_marker_arity!(AsyncProvider1, A);
+impl_provider_marker_fallible_arity!(Fallible1, A);
+impl_provider_marker_fallible_arity!(AsyncFallible1, A);
 impl_provider_fn!(
     Provider2,
     Fallible2,
@@ -551,6 +645,10 @@ impl_provider_fn!(
     A,
     B
 );
+impl_provider_marker_arity!(Provider2, A, B);
+impl_provider_marker_arity!(AsyncProvider2, A, B);
+impl_provider_marker_fallible_arity!(Fallible2, A, B);
+impl_provider_marker_fallible_arity!(AsyncFallible2, A, B);
 impl_provider_fn!(
     Provider3,
     Fallible3,
@@ -562,6 +660,10 @@ impl_provider_fn!(
     B,
     C
 );
+impl_provider_marker_arity!(Provider3, A, B, C);
+impl_provider_marker_arity!(AsyncProvider3, A, B, C);
+impl_provider_marker_fallible_arity!(Fallible3, A, B, C);
+impl_provider_marker_fallible_arity!(AsyncFallible3, A, B, C);
 impl_provider_fn!(
     Provider4,
     Fallible4,
@@ -574,6 +676,10 @@ impl_provider_fn!(
     C,
     D
 );
+impl_provider_marker_arity!(Provider4, A, B, C, D);
+impl_provider_marker_arity!(AsyncProvider4, A, B, C, D);
+impl_provider_marker_fallible_arity!(Fallible4, A, B, C, D);
+impl_provider_marker_fallible_arity!(AsyncFallible4, A, B, C, D);
 impl_provider_fn!(
     Provider5,
     Fallible5,
@@ -587,6 +693,10 @@ impl_provider_fn!(
     D,
     E
 );
+impl_provider_marker_arity!(Provider5, A, B, C, D, E);
+impl_provider_marker_arity!(AsyncProvider5, A, B, C, D, E);
+impl_provider_marker_fallible_arity!(Fallible5, A, B, C, D, E);
+impl_provider_marker_fallible_arity!(AsyncFallible5, A, B, C, D, E);
 impl_provider_fn!(
     Provider6,
     Fallible6,
@@ -601,6 +711,10 @@ impl_provider_fn!(
     E,
     F
 );
+impl_provider_marker_arity!(Provider6, A, B, C, D, E, F);
+impl_provider_marker_arity!(AsyncProvider6, A, B, C, D, E, F);
+impl_provider_marker_fallible_arity!(Fallible6, A, B, C, D, E, F);
+impl_provider_marker_fallible_arity!(AsyncFallible6, A, B, C, D, E, F);
 impl_provider_fn!(
     Provider7,
     Fallible7,
@@ -616,6 +730,10 @@ impl_provider_fn!(
     F,
     G
 );
+impl_provider_marker_arity!(Provider7, A, B, C, D, E, F, G);
+impl_provider_marker_arity!(AsyncProvider7, A, B, C, D, E, F, G);
+impl_provider_marker_fallible_arity!(Fallible7, A, B, C, D, E, F, G);
+impl_provider_marker_fallible_arity!(AsyncFallible7, A, B, C, D, E, F, G);
 impl_provider_fn!(
     Provider8,
     Fallible8,
@@ -632,3 +750,7 @@ impl_provider_fn!(
     G,
     H
 );
+impl_provider_marker_arity!(Provider8, A, B, C, D, E, F, G, H);
+impl_provider_marker_arity!(AsyncProvider8, A, B, C, D, E, F, G, H);
+impl_provider_marker_fallible_arity!(Fallible8, A, B, C, D, E, F, G, H);
+impl_provider_marker_fallible_arity!(AsyncFallible8, A, B, C, D, E, F, G, H);

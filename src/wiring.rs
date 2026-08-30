@@ -283,3 +283,146 @@ macro_rules! impl_private_wiring_methods {
 }
 
 pub(crate) use impl_private_wiring_methods;
+
+/// Group provide/supply variants shared by [`ModrunBuilder`](crate::ModrunBuilder) and [`Module`](crate::Module).
+macro_rules! impl_group_wiring_methods {
+    ($ty:ty) => {
+        impl $ty {
+            /// Register a group member constructor (sync / infallible).
+            ///
+            /// `T` is inferred from the constructor's return type; there is no
+            /// `provide_group::<T>(...)` turbofish. For a trait-object group,
+            /// return `Arc<dyn Trait>` from the constructor.
+            #[must_use]
+            pub fn provide_group<M, F>(mut self, ctor: F) -> Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::ProviderFn<M> + 'static,
+            {
+                self.provide_group_mut(ctor);
+                self
+            }
+
+            /// [`provide_group`](Self::provide_group) for `&mut self`.
+            pub fn provide_group_mut<M, F>(&mut self, ctor: F) -> &mut Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::ProviderFn<M> + 'static,
+            {
+                self.push_option($crate::provide_group::provide_group::<M, F>(ctor));
+                self
+            }
+
+            /// Register a fallible group member constructor (`Result<T, E>`).
+            #[must_use]
+            pub fn provide_group_result<M, F>(mut self, ctor: F) -> Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::FallibleProviderFn<M> + 'static,
+            {
+                self.provide_group_result_mut(ctor);
+                self
+            }
+
+            /// [`provide_group_result`](Self::provide_group_result) for `&mut self`.
+            pub fn provide_group_result_mut<M, F>(&mut self, ctor: F) -> &mut Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::FallibleProviderFn<M> + 'static,
+            {
+                self.push_option($crate::provide_group::provide_group_result::<M, F>(ctor));
+                self
+            }
+
+            /// Register an async group member constructor.
+            #[must_use]
+            pub fn provide_group_async<M, F>(mut self, ctor: F) -> Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::AsyncProviderFn<M> + 'static,
+            {
+                self.provide_group_async_mut(ctor);
+                self
+            }
+
+            /// [`provide_group_async`](Self::provide_group_async) for `&mut self`.
+            pub fn provide_group_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::AsyncProviderFn<M> + 'static,
+            {
+                self.push_option($crate::provide_group::provide_group_async::<M, F>(ctor));
+                self
+            }
+
+            /// Register a fallible async group member constructor (`Result<T, E>`).
+            #[must_use]
+            pub fn provide_group_result_async<M, F>(mut self, ctor: F) -> Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
+            {
+                self.provide_group_result_async_mut(ctor);
+                self
+            }
+
+            /// [`provide_group_result_async`](Self::provide_group_result_async) for `&mut self`.
+            pub fn provide_group_result_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
+            where
+                M: $crate::provide::ProviderMarker,
+                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
+                F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
+            {
+                self.push_option($crate::provide_group::provide_group_result_async::<M, F>(
+                    ctor,
+                ));
+                self
+            }
+
+            /// Supply a pre-built group member.
+            #[must_use]
+            pub fn supply_group<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
+                self.supply_group_mut(value);
+                self
+            }
+
+            /// [`supply_group`](Self::supply_group) for `&mut self`.
+            pub fn supply_group_mut<T: Clone + Send + Sync + 'static>(
+                &mut self,
+                value: T,
+            ) -> &mut Self {
+                self.push_option($crate::supply_group::supply_group(value));
+                self
+            }
+
+            /// Register an already-erased group member, from
+            /// [`ProviderFn::into_provider`](crate::ProviderFn::into_provider).
+            #[must_use]
+            pub fn provide_group_dyn<T: Clone + Send + Sync + 'static>(
+                mut self,
+                provider: $crate::DynProvider,
+            ) -> Self {
+                self.provide_group_dyn_mut::<T>(provider);
+                self
+            }
+
+            /// [`provide_group_dyn`](Self::provide_group_dyn) for `&mut self`.
+            pub fn provide_group_dyn_mut<T: Clone + Send + Sync + 'static>(
+                &mut self,
+                provider: $crate::DynProvider,
+            ) -> &mut Self {
+                self.push_option($crate::provide_group::provide_group_dyn::<T>(provider));
+                self
+            }
+        }
+    };
+}
+
+pub(crate) use impl_group_wiring_methods;

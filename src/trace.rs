@@ -163,6 +163,42 @@ pub(crate) fn supplied(type_name: &str, scope_name: &'static str, private: bool)
     );
 }
 
+pub(crate) fn provided_group(
+    type_name: &str,
+    constructor: &str,
+    scope_name: &'static str,
+    private: bool,
+) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    let private_str = if private { " (PRIVATE)" } else { "" };
+    let suffix = module_suffix(scope_name);
+    tracing::info!(
+        target: TARGET,
+        type_name,
+        constructor,
+        module = scope_name,
+        private,
+        "{PREFIX} PROVIDE GROUP{private_str}\t{type_name} <= {constructor}{suffix}"
+    );
+}
+
+pub(crate) fn supplied_group(type_name: &str, scope_name: &'static str, private: bool) {
+    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        return;
+    }
+    let private_str = if private { " (PRIVATE)" } else { "" };
+    let suffix = module_suffix(scope_name);
+    tracing::info!(
+        target: TARGET,
+        type_name,
+        module = scope_name,
+        private,
+        "{PREFIX} SUPPLY GROUP{private_str}\t{type_name}{suffix}"
+    );
+}
+
 pub(crate) fn before_run(name: &str, scope_name: &'static str) {
     if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
         return;

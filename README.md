@@ -218,6 +218,60 @@ Everything registered with plain `provide` or `supply` is visible everywhere, wh
 it was declared. `provide_private` / `supply_private` exist only on [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html),
 not on the root builder.
 
+## Groups
+
+Multiple modules can each contribute one value of the same type; a consumer receives
+them as [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html) (not
+`Vec<T>`). Register members with [`provide_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_group)
+(and `provide_group_async` / `provide_group_result` / `provide_group_result_async`
+when needed). Members are aggregated in registration order and do **not** occupy the
+singleton slot for `T`, so they can coexist with a separate `provide` of the same type.
+
+```rust
+use modrun::{Group, Modrun, Module};
+
+# #[derive(Clone, PartialEq, Eq)] struct Handler(&'static str);
+# fn user_handler() -> Handler { Handler("user") }
+# fn order_handler() -> Handler { Handler("order") }
+# fn boot(_: Group<Handler>) {}
+
+Modrun::builder()
+    .module(Module::new("user").provide_group(user_handler))
+    .module(Module::new("order").provide_group(order_handler))
+    .invoke(boot)
+# ;
+```
+
+Inject `Group<T>` (or `Arc<Group<T>>`) in an invoker or constructor; iterate with
+`for item in group`. Members and injected groups require `T: Clone`; prefer
+`Arc<Group<T>>` when several consumers need the same collection, or return
+`Arc<T>` / `Arc<dyn Trait>` from group member constructors when values are heavy.
+With no members, register the empty group with
+[`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)
+or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)
+(`require_group` also fails the build if the group stays empty; only the composition
+root can call it). `T` is inferred from the constructor return type (no `provide_group::<T>`
+turbofish); for a trait-object group, return `Arc<dyn Trait>`. A module-private
+[`provide_private`](https://docs.rs/modrun/latest/modrun/struct.Module.html#method.provide_private)
+of `Group<T>` shadows the aggregated group inside that module — use
+[`provide_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_group)
+to contribute members instead. For two groups of the same element type, use
+newtypes (same as duplicate singletons).
+
+**Method matrix** (all have `_mut` on [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)
+and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) where applicable):
+
+| Register | Use when |
+|----------|----------|
+| `provide_group` | sync infallible member ctor |
+| `provide_group_result` | sync fallible (`Result`) |
+| `provide_group_async` | async infallible |
+| `provide_group_result_async` | async fallible |
+| `supply_group` | pre-built member value |
+| `provide_group_dyn` | erased ctor from `into_provider()` |
+| `init_group` / `require_group` | composition root only; empty vs non-empty policy |
+| `init_group_mut` / `require_group_mut` | same, for `&mut self` builders |
+
 ## Logging
 
 Framework events (provide / supply / invoke / construct / OnStart / OnStop) are
@@ -405,6 +459,9 @@ Graph problems fail before constructors run. Typical `Display` text:
 * `invoker my::boot failed: …`
 * `hook 'http.serve' failed: …`
 * `background task failed during start`
+* `required group is empty: modrun::Group<my::Route>`
+* `provide_group_dyn type mismatch: expected my::Route, got alloc::string::String`
+* `invoker in module '<root>' needs a dependency nothing provides: modrun::Group<my::Route>; register the group with init_group, provide_group, or require_group`
 
 Constructor and hook failures keep the original error on
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source).
@@ -425,6 +482,7 @@ If unwind fails after an earlier phase error, both are retained on
 
 ```bash
 cargo run --example basic    # domain modules, private deps, an async constructor
+cargo run --example handlers # multiple modules contribute to a Group
 cargo run --example worker   # newtype pools + task that selects on Stopped
 cargo run --example swap     # supply a fake at the composition root (tests)
 cargo run --example axum     # HTTP server: task_with binds in OnStart, then serve

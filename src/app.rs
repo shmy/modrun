@@ -9,7 +9,7 @@ use crate::option::ModOption;
 use crate::scope::ScopeId;
 use crate::shutdown::Shutdowner;
 use crate::timeout::DEFAULT_TIMEOUT;
-use crate::wiring::impl_wiring_methods;
+use crate::wiring::{impl_group_wiring_methods, impl_wiring_methods};
 
 /// Entry point for configuring an application: [`Modrun::builder`].
 #[derive(Debug)]
@@ -571,6 +571,40 @@ async fn unwind_registered(lifecycle: &Lifecycle, stop_timeout: Option<Duration>
 }
 
 impl_wiring_methods!(ModrunBuilder);
+impl_group_wiring_methods!(ModrunBuilder);
+
+impl ModrunBuilder {
+    /// Register an empty [`Group`](crate::Group) so invokers can depend on `Group<T>`
+    /// when no module contributes a member.
+    #[must_use]
+    pub fn init_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
+        self.init_group_mut::<T>();
+        self
+    }
+
+    /// [`init_group`](Self::init_group) for `&mut self`.
+    pub fn init_group_mut<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
+        self.push_option(crate::provide_group::init_group::<T>());
+        self
+    }
+
+    /// Fail at build time when `Group<T>` would be empty.
+    ///
+    /// Registers the group if needed, so this does not require [`init_group`](Self::init_group)
+    /// or a prior [`provide_group`](Self::provide_group). Only the composition root
+    /// should call this; modules cannot declare group policy.
+    #[must_use]
+    pub fn require_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
+        self.require_group_mut::<T>();
+        self
+    }
+
+    /// [`require_group`](Self::require_group) for `&mut self`.
+    pub fn require_group_mut<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
+        self.push_option(crate::provide_group::require_group::<T>());
+        self
+    }
+}
 
 /// Mutable state while options are applied. Formerly `AppBuilder`.
 pub(crate) struct BuildState {

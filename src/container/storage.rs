@@ -112,11 +112,9 @@ pub(crate) fn ensure_absent(
 
     let conflict = if private {
         container.values_private.contains_key(&(id, scope))
-            || container.providers.contains_key(&ProviderKey {
-                type_id: id,
-                scope,
-                private: true,
-            })
+            || container
+                .providers
+                .contains_key(&ProviderKey::singleton(id, scope, true))
             || container.private_alias.contains_key(&(id, scope))
     } else {
         container.values_public.contains_key(&id) || container.public_index.contains_key(&id)
@@ -136,11 +134,20 @@ pub(crate) fn ensure_absent(
     }
 }
 
-fn downcast_clone<T: Clone + Send + Sync + 'static>(value: &DynAny) -> Result<T> {
+pub(crate) fn downcast_clone<T: Clone + Send + Sync + 'static>(value: &DynAny) -> Result<T> {
     value
         .downcast_ref::<T>()
         .cloned()
         .ok_or_else(|| Error::Downcast(type_name::<T>()))
+}
+
+/// Move a packed member out of its `Arc` when this is the last handle.
+pub(crate) fn take_packed_member<T: Clone + Send + Sync + 'static>(value: DynAny) -> Result<T> {
+    let arc = Arc::downcast::<T>(value).map_err(|_| Error::Downcast(type_name::<T>()))?;
+    match Arc::try_unwrap(arc) {
+        Ok(value) => Ok(value),
+        Err(arc) => Ok((*arc).clone()),
+    }
 }
 
 pub(crate) fn seed_builtins(

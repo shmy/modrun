@@ -116,6 +116,16 @@
 //! }
 //! ```
 //!
+//! # Groups
+//!
+//! Several modules can each contribute one `T`; consumers inject [`Group<T>`]
+//! (not `Vec<T>`). Register members with [`ModrunBuilder::provide_group`]. An
+//! empty group needs [`ModrunBuilder::init_group`] (or
+//! [`ModrunBuilder::require_group`], which also registers the group and then
+//! rejects emptiness). Members do not occupy the singleton slot for `T`. Group
+//! members and injected groups require `T: Clone`; prefer `Arc<Group<T>>` or
+//! `Group<Arc<T>>` when many consumers or heavy values would otherwise clone.
+//!
 //! # Startup banner
 //!
 //! [`ModrunBuilder::run`] and [`ModrunBuilder::start`] print a modrun ASCII banner
@@ -145,16 +155,17 @@
 //!
 //! # Stability
 //!
-//! The public model is type-keyed singletons, lazy `provide`, `invoke` as the
-//! graph root, and start/stop via [`Lifecycle`]. There are no string qualifiers
-//! and no service locator after build. [`Hook`] methods will only grow with
-//! defaults. Constructors and invokers accept at most eight parameters; group
-//! extra deps in a struct. MSRV is **1.85** (edition 2024). Examples may need a
-//! newer compiler via their own dependencies (the MSRV job does not compile
-//! `--all-targets`).
+//! The public model is type-keyed singletons, [`Group<T>`] value groups, lazy
+//! `provide`, `invoke` as the graph root, and start/stop via [`Lifecycle`]. There
+//! are no string qualifiers and no service locator after build. [`Hook`] methods
+//! will only grow with defaults. Constructors and invokers accept at most eight
+//! parameters; pack extra deps in a struct. MSRV is **1.85** (edition 2024).
+//! Examples may need a newer compiler via their own dependencies (the MSRV job
+//! does not compile `--all-targets`).
 //!
 //! Application code should use [`ModrunBuilder::provide`] /
-//! [`ModrunBuilder::invoke`], not the [`ProviderFn`] marker types.
+//! [`ModrunBuilder::invoke`], not the [`ProviderFn`] / [`ProviderMarker`] marker types
+//! (except when wrapping the wiring API).
 //!
 //! # Crate features
 //!
@@ -175,14 +186,17 @@ mod container;
 mod deps;
 mod error;
 mod future;
+mod group;
 mod invoke;
 mod lifecycle;
 mod module;
 mod option;
 mod provide;
+mod provide_group;
 mod scope;
 mod shutdown;
 mod supply;
+mod supply_group;
 mod task;
 mod timeout;
 mod trace;
@@ -191,6 +205,7 @@ mod wiring;
 pub use app::{Modrun, ModrunBuilder, RunningApp};
 pub use banner::DEFAULT_BANNER;
 pub use error::{BoxError, Error, MultipleStopError, Result};
+pub use group::Group;
 pub use lifecycle::{Hook, HookFn, Lifecycle, hook};
 pub use module::Module;
 pub use shutdown::Shutdowner;
@@ -207,6 +222,7 @@ pub mod logging;
 pub use invoke::{AsyncInvokeFn, DynInvoker, InvokeFn};
 pub use provide::{
     AsyncProviderFn, DynProvider, FallibleAsyncProviderFn, FallibleProviderFn, ProviderFn,
+    ProviderMarker,
 };
 
 #[cfg(doctest)]

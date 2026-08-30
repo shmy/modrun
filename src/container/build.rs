@@ -94,11 +94,7 @@ impl Container {
             crate::trace::before_run(constructor, module);
             let timed = crate::trace::start_timer();
             let mut call = ConstructCallGuard::new(constructor, module);
-            let out = guard
-                .container
-                .provider_at(key)
-                .expect("pending key missing provider")
-                .construct(guard.container);
+            let out = guard.container.construct_at(key);
             guard.container.leave_scope(previous);
             match out {
                 Err(err) => {
@@ -120,17 +116,25 @@ impl Container {
 
         for (key, name, module, built, elapsed) in readies {
             finish_ready(name, module, elapsed);
-            guard
-                .container
-                .store_constructed(key.type_id, built, key.scope, key.private);
+            if key.is_group_member() {
+                guard.container.store_group_member(key, built.value);
+            } else {
+                guard
+                    .container
+                    .store_constructed(key.type_id, built, key.scope, key.private);
+            }
             pending.remove(&key);
         }
 
         let results = join_constructs(futs).await?;
         for (key, built) in results {
-            guard
-                .container
-                .store_constructed(key.type_id, built, key.scope, key.private);
+            if key.is_group_member() {
+                guard.container.store_group_member(key, built.value);
+            } else {
+                guard
+                    .container
+                    .store_constructed(key.type_id, built, key.scope, key.private);
+            }
             pending.remove(&key);
         }
         drop(guard);

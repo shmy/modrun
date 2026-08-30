@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html): multiple modules contribute values of the same type; inject `Group<T>` or `Arc<Group<T>>`. Register members with `provide_group` / `provide_group_result` / `provide_group_async` / `provide_group_result_async`, `supply_group`, or `provide_group_dyn` (and `_mut` variants). Empty groups need [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group) or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group) (`require_group` also rejects emptiness at build time). Members require `T: Clone`. `handlers` example.
 * [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) / [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html) for long-running OnStart work. OnStop signals the task and joins; drop aborts leftover work.
 * [`task_with`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) / [`PreparedTask`](https://docs.rs/modrun/latest/modrun/struct.PreparedTask.html): await setup (bind/listen) during OnStart so those failures fail start, then spawn the rest.
 * [`logging::try_init`](https://docs.rs/modrun/latest/modrun/logging/fn.try_init.html) / `try_init_with_filter` so callers can detect an existing subscriber.

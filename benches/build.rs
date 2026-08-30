@@ -1,11 +1,15 @@
 //! Build / lifecycle microbenchmarks for cold-start tuning.
 #![allow(missing_docs, dead_code)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use modrun::{Lifecycle, Modrun, Module, hook};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use modrun::{Group, Lifecycle, Modrun, ModrunBuilder, Module, hook};
 use tokio::runtime::Runtime;
+
+const GROUP_MEMBER_COUNTS: [usize; 4] = [8, 32, 128, 512];
+const MEMBER_PAYLOAD_BYTES: usize = 512;
 
 fn runtime() -> Runtime {
     Runtime::new().expect("runtime")
@@ -154,10 +158,112 @@ fn async_independent_ctors(c: &mut Criterion) {
     });
 }
 
+/// Group member with a fixed payload so `Clone` cost is visible in benchmarks.
+#[derive(Clone, PartialEq, Eq)]
+struct BenchMember {
+    id: u32,
+    payload: Vec<u8>,
+}
+
+fn make_member(id: u32) -> BenchMember {
+    BenchMember {
+        id,
+        payload: vec![id as u8; MEMBER_PAYLOAD_BYTES],
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GroupSource {
+    Provide,
+    Supply,
+}
+
+#[derive(Clone, Copy)]
+enum GroupInject {
+    Value,
+    Arc,
+}
+
+fn register_group_members(
+    builder: ModrunBuilder,
+    count: usize,
+    source: GroupSource,
+) -> ModrunBuilder {
+    let mut builder = builder;
+    match source {
+        GroupSource::Provide => {
+            for i in 0..count {
+                let id = i as u32;
+                builder = builder.provide_group(move || make_member(id));
+            }
+        }
+        GroupSource::Supply => {
+            for i in 0..count {
+                builder = builder.supply_group(make_member(i as u32));
+            }
+        }
+    }
+    builder
+}
+
+async fn cold_start_with_group(count: usize, source: GroupSource, inject: GroupInject) {
+    let builder = register_group_members(Modrun::builder().no_banner(), count, source);
+    match inject {
+        GroupInject::Value => {
+            builder
+                .invoke(|_: Group<BenchMember>| {})
+                .start()
+                .await
+                .unwrap()
+                .stop()
+                .await
+                .unwrap();
+        }
+        GroupInject::Arc => {
+            builder
+                .invoke(|_: Arc<Group<BenchMember>>| {})
+                .start()
+                .await
+                .unwrap()
+                .stop()
+                .await
+                .unwrap();
+        }
+    }
+}
+
+fn bench_groups(c: &mut Criterion) {
+    let rt = runtime();
+    let mut group = c.benchmark_group("build_groups");
+
+    for count in GROUP_MEMBER_COUNTS {
+        for source in [GroupSource::Provide, GroupSource::Supply] {
+            for inject in [GroupInject::Value, GroupInject::Arc] {
+                let source_label = match source {
+                    GroupSource::Provide => "provide",
+                    GroupSource::Supply => "supply",
+                };
+                let inject_label = match inject {
+                    GroupInject::Value => "value",
+                    GroupInject::Arc => "arc",
+                };
+                let id = BenchmarkId::new(format!("{source_label}/{inject_label}"), count);
+                group.bench_with_input(id, &count, |b, &count| {
+                    b.to_async(&rt)
+                        .iter(|| cold_start_with_group(count, source, inject));
+                });
+            }
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     build_small,
     build_deep_modules,
+    bench_groups,
     lifecycle_hooks,
     async_independent_ctors
 );

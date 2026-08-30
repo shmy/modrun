@@ -88,4 +88,32 @@ pub(crate) struct ProviderKey {
     pub(crate) type_id: TypeId,
     pub(crate) scope: ScopeId,
     pub(crate) private: bool,
+    /// `0` for singleton and group-virtual providers; `1+` for group members.
+    pub(crate) ordinal: u32,
+}
+
+impl ProviderKey {
+    pub(crate) fn singleton(type_id: TypeId, scope: ScopeId, private: bool) -> Self {
+        Self {
+            type_id,
+            scope,
+            private,
+            ordinal: 0,
+        }
+    }
+
+    pub(crate) fn is_group_member(self) -> bool {
+        self.ordinal > 0
+    }
+}
+
+/// Element type `T` for [`crate::Group<T>`] registrations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GroupElementKey {
+    pub(crate) element: TypeId,
+}
+
+pub(crate) struct GroupRegistration {
+    pub(crate) element: TypeId,
+    pub(crate) virtual_key: ProviderKey,
 }

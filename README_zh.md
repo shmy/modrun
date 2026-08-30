@@ -153,6 +153,59 @@ Modrun::builder()
 用普通 `provide` / `supply` 注册的类型在任何地方都可见，不论在哪声明。
 `provide_private` / `supply_private` 只存在于 [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上，根 builder 没有。
 
+## 值组（Groups）
+
+多个模块可以各自贡献同一个类型的实例；消费者在注入点拿到的是
+[`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html)（不是 `Vec<T>`）。
+用 [`provide_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_group)
+注册成员（需要时用 `provide_group_async` / `provide_group_result` /
+`provide_group_result_async`）。成员按注册顺序聚合，**不占用** `T` 的单例槽位，
+因此可以和同类型的 `provide` 单例并存。
+
+```rust
+use modrun::{Group, Modrun, Module};
+
+# #[derive(Clone, PartialEq, Eq)] struct Handler(&'static str);
+# fn user_handler() -> Handler { Handler("user") }
+# fn order_handler() -> Handler { Handler("order") }
+# fn boot(_: Group<Handler>) {}
+
+Modrun::builder()
+    .module(Module::new("user").provide_group(user_handler))
+    .module(Module::new("order").provide_group(order_handler))
+    .invoke(boot)
+# ;
+```
+
+在 invoker 或构造函数里注入 `Group<T>`（或 `Arc<Group<T>>`），用 `for item in group` 遍历。
+组成员与注入的组都要求 `T: Clone`；多个消费者共享同一集合时优先用 `Arc<Group<T>>`，
+值较重时让组成员构造函数返回 `Arc<T>` / `Arc<dyn Trait>`。
+没有任何成员时，用
+[`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)
+或
+[`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)
+注册空组（`require_group` 还会在组仍为空时让构建失败，且只能由组合根调用）。
+`T` 由构造函数返回类型推断（没有 `provide_group::<T>` turbofish）；
+trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
+[`provide_private`](https://docs.rs/modrun/latest/modrun/struct.Module.html#method.provide_private)
+的 `Group<T>` 会在该模块内遮蔽聚合结果——贡献成员请用
+[`provide_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_group)。
+同一元素类型要分多组时，用 newtype（与单例重复时一样）。
+
+**方法矩阵**（[`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
+[`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上均有对应 `_mut` 变体）：
+
+| 注册 | 场景 |
+|------|------|
+| `provide_group` | 同步、不可失败 |
+| `provide_group_result` | 同步、`Result` |
+| `provide_group_async` | 异步、不可失败 |
+| `provide_group_result_async` | 异步、`Result` |
+| `supply_group` | 已有实例 |
+| `provide_group_dyn` | 擦除后的 ctor（`into_provider()`） |
+| `init_group` / `require_group` | 仅组合根；空组 / 非空策略 |
+| `init_group_mut` / `require_group_mut` | 同上，`&mut self` 构建 |
+
 ## 日志
 
 框架事件（provide / supply / invoke / construct / OnStart / OnStop）通过 [`tracing`](https://docs.rs/tracing) 发出，target 为 `modrun`，控制台行是 [uber/fx](https://github.com/uber-go/fx) 风格，例如
@@ -291,6 +344,9 @@ hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默�
 * `invoker my::boot failed: …`
 * `hook 'http.serve' failed: …`
 * `background task failed during start`
+* `required group is empty: modrun::Group<my::Route>`
+* `provide_group_dyn type mismatch: expected my::Route, got alloc::string::String`
+* `invoker in module '<root>' needs a dependency nothing provides: modrun::Group<my::Route>; register the group with init_group, provide_group, or require_group`
 
 构造函数和 hook 失败会把原始错误留在
 [`std::error::Error::source`](https://doc.rust-lang.org/std/error/trait.Error.html#tymethod.source)。
@@ -311,6 +367,7 @@ hook 里 sleep 的测试应显式设置超时（或 `no_start_timeout`）；默�
 
 ```bash
 cargo run --example basic    # 领域模块、私有依赖、async 构造函数
+cargo run --example handlers # 多模块向 Group 贡献成员
 cargo run --example worker   # newtype 连接池 + 在 Stopped 上 select 的 task
 cargo run --example swap     # 在组合根 supply 假实现（测试）
 cargo run --example axum     # HTTP 服务：task_with 在 OnStart 里 bind，再 serve

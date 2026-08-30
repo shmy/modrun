@@ -272,6 +272,40 @@ and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) where ap
 | `init_group` / `require_group` | composition root only; empty vs non-empty policy |
 | `init_group_mut` / `require_group_mut` | same, for `&mut self` builders |
 
+## Dependency graph
+
+Export the wiring graph as [Graphviz DOT](https://graphviz.org/doc/info/lang.html) for
+documentation or debugging. Validation runs first (missing providers and cycles surface
+as errors), but no constructor or invoker runs.
+
+```rust
+use modrun::Modrun;
+
+# #[derive(Clone)] struct Config;
+# #[derive(Clone)] struct Server;
+# fn new_config() -> Config { Config }
+# fn new_server(_: Config) -> Server { Server }
+# fn boot(_: Server) {}
+
+// Return DOT as a string (no file I/O)
+let dot = Modrun::builder()
+    .provide(new_config)
+    .provide(new_server)
+    .invoke(boot)
+    .render_dot()?;
+# Ok::<(), modrun::Error>(())
+```
+
+To write a file before graph construction when starting the app, chain
+[`.dot_graph("modrun.dot")`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.dot_graph)
+on the builder passed to [`run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run).
+
+Nodes show the type, constructor name, and module scope (subgraph per module).
+Solid arrows are constructor / invoker dependencies; dotted edges link group members
+to their `Group<T>` aggregate. Built-in `Lifecycle` and `Shutdowner` nodes are
+omitted for clarity. See [docs/graph-sample.dot](docs/graph-sample.dot) for sample
+output. Render with `dot -Tpng modrun.dot -o modrun.png`.
+
 ## Logging
 
 Framework events (provide / supply / invoke / construct / OnStart / OnStop) are

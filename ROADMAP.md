@@ -18,7 +18,7 @@
 | 可观测性（底层） | ✅ `trace.rs`，Fx 风格 console + structured fields |
 | Decorate | ⚠️ 可用 `provide_private` + `provide` 模拟，无一等 API |
 | Value Groups | ✅ `Group<T>` + `provide_group*` / `supply_group` / `require_group` |
-| Graph 导出 | ❌ 内部有图，无 DOT / CLI |
+| Graph 导出 | ✅ `render_dot()` + `.dot_graph(path)` |
 
 ***
 
@@ -588,15 +588,15 @@ digraph {
 
 ### 测试
 
-* \[ ] 简单链 `A → B → C` DOT 快照
-* \[ ] 多 module + private 节点标注
+* \[x] 简单链 `A → B → C` DOT 快照
+* \[x] 多 module + private 节点标注
 * \[ ] cycle 图仍能输出（标记 cycle 边，或仅 acyclic 时导出）
-* \[ ] `render_dot()` 不执行 ctor / invoker
+* \[x] `render_dot()` 不执行 ctor / invoker
 
 ### 文档
 
-* \[ ] README 新增 **Dependency graph** 节
-* \[ ] `dot_graph` 示例截图或 sample output
+* \[x] README 新增 **Dependency graph** 节
+* \[x] `dot_graph` 示例截图或 sample output
 
 ### 里程碑
 

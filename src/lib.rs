@@ -126,6 +126,13 @@
 //! members and injected groups require `T: Clone`; prefer `Arc<Group<T>>` or
 //! `Group<Arc<T>>` when many consumers or heavy values would otherwise clone.
 //!
+//! # Dependency graph
+//!
+//! Export the wiring graph with [`ModrunBuilder::render_dot`] or
+//! [`.dot_graph(path)`](ModrunBuilder::dot_graph) (DOT is written after validation,
+//! before constructors run). Built-in `Lifecycle` and `Shutdowner` are omitted from
+//! the exported graph.
+//!
 //! # Startup banner
 //!
 //! [`ModrunBuilder::run`] and [`ModrunBuilder::start`] print a modrun ASCII banner
@@ -186,6 +193,7 @@ mod container;
 mod deps;
 mod error;
 mod future;
+mod graph;
 mod group;
 mod invoke;
 mod lifecycle;

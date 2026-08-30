@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::scope::ScopeId;
 
-use super::types::{ArcBox, Constructed};
+use super::types::{ArcBox, Constructed, ValueNode};
 use super::{ArcResolveFn, Container, DynAny, TypeIdMap};
 
 pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
@@ -54,6 +54,18 @@ impl Container {
             private,
         )?;
         self.store_constructed(TypeId::of::<T>(), packed, scope, private);
+        self.value_nodes.push(ValueNode {
+            type_id: TypeId::of::<T>(),
+            type_name: type_name::<T>(),
+            scope,
+            private,
+        });
+        self.value_nodes.push(ValueNode {
+            type_id: TypeId::of::<Arc<T>>(),
+            type_name: type_name::<Arc<T>>(),
+            scope,
+            private,
+        });
         Ok(())
     }
 

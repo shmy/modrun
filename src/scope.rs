@@ -1,9 +1,13 @@
 /// Identifies a module scope in the application tree. Root is [`ScopeId::ROOT`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ScopeId(u32);
 
 impl ScopeId {
     pub(crate) const ROOT: ScopeId = ScopeId(0);
+
+    pub(crate) fn discriminant(self) -> u32 {
+        self.0
+    }
 
     fn index(self) -> usize {
         self.0 as usize

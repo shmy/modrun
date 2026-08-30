@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::container::{Container, seed_builtins};
@@ -45,6 +46,7 @@ pub struct ModrunBuilder {
     build_timeout: Option<Duration>,
     start_timeout: Option<Duration>,
     stop_timeout: Option<Duration>,
+    dot_graph_path: Option<PathBuf>,
 }
 
 impl Default for ModrunBuilder {
@@ -55,6 +57,7 @@ impl Default for ModrunBuilder {
             build_timeout: Some(DEFAULT_TIMEOUT),
             start_timeout: Some(DEFAULT_TIMEOUT),
             stop_timeout: Some(DEFAULT_TIMEOUT),
+            dot_graph_path: None,
         }
     }
 }
@@ -67,6 +70,7 @@ impl std::fmt::Debug for ModrunBuilder {
             .field("build_timeout", &self.build_timeout)
             .field("start_timeout", &self.start_timeout)
             .field("stop_timeout", &self.stop_timeout)
+            .field("dot_graph_path", &self.dot_graph_path)
             .finish()
     }
 }
@@ -245,6 +249,38 @@ impl ModrunBuilder {
         self
     }
 
+    /// Render the dependency graph as a Graphviz DOT document without running
+    /// constructors or invokers.
+    ///
+    /// Wiring is validated first, so missing providers and dependency cycles
+    /// surface as errors rather than an incomplete graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`start`](Self::start).
+    pub fn render_dot(self) -> Result<String> {
+        let state = self.prepare_build_state()?;
+        Ok(crate::graph::render_dot(&state.container, &state.invokers))
+    }
+
+    /// Write the dependency graph to a DOT file before graph construction runs.
+    ///
+    /// The file is written after wiring validation succeeds and before any
+    /// constructor or invoker runs. Combine with [`run`](Self::run) or
+    /// [`start`](Self::start) to export the graph for an application that will
+    /// actually start.
+    #[must_use]
+    pub fn dot_graph(mut self, path: impl Into<PathBuf>) -> Self {
+        self.dot_graph_mut(path);
+        self
+    }
+
+    /// [`dot_graph`](Self::dot_graph) for `&mut self`.
+    pub fn dot_graph_mut(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.dot_graph_path = Some(path.into());
+        self
+    }
+
     fn print_banner(&self) {
         crate::banner::emit(&self.banner);
     }
@@ -407,7 +443,28 @@ impl ModrunBuilder {
         Ok(RunningApp { inner: Some(app) })
     }
 
-    fn into_build_state(self, lifecycle: Lifecycle, shutdown: Shutdowner) -> Result<BuildState> {
+    fn into_build_state(mut self, lifecycle: Lifecycle, shutdown: Shutdowner) -> Result<BuildState> {
+        let dot_graph_path = self.dot_graph_path.take();
+        let state = self.prepare_build_state_with(lifecycle, shutdown)?;
+        if let Some(path) = dot_graph_path {
+            let dot = crate::graph::render_dot(&state.container, &state.invokers);
+            std::fs::write(&path, dot).map_err(|source| Error::io("write dot graph", source))?;
+            crate::trace::dot_graph_written(path.as_os_str().to_string_lossy().as_ref());
+        }
+        Ok(state)
+    }
+
+    fn prepare_build_state(self) -> Result<BuildState> {
+        let shutdown = Shutdowner::new();
+        let lifecycle = Lifecycle::new(shutdown.clone());
+        self.prepare_build_state_with(lifecycle, shutdown)
+    }
+
+    fn prepare_build_state_with(
+        self,
+        lifecycle: Lifecycle,
+        shutdown: Shutdowner,
+    ) -> Result<BuildState> {
         let mut state = BuildState {
             container: Container::new(),
             invokers: Vec::new(),

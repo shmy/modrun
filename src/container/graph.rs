@@ -275,19 +275,38 @@ impl Container {
     }
 
     fn value_satisfies(&self, id: TypeId, from: ScopeId) -> bool {
+        self.resolve_value_binding(id, from).is_some()
+    }
+
+    /// Where a pre-built value would be resolved from, mirroring [`value_satisfies`].
+    pub(crate) fn resolve_value_binding(
+        &self,
+        id: TypeId,
+        from: ScopeId,
+    ) -> Option<(ScopeId, bool)> {
         for scope in self.scopes.ancestors_from(from) {
             if self.values_private.contains_key(&(id, scope)) {
-                return true;
+                return Some((scope, true));
             }
             if self
                 .providers
                 .contains_key(&ProviderKey::singleton(id, scope, true))
                 || self.private_alias.contains_key(&(id, scope))
             {
-                return false;
+                return None;
             }
         }
-        self.values_public.contains_key(&id)
+        if self.values_public.contains_key(&id) {
+            if let Some(node) = self
+                .value_nodes
+                .iter()
+                .find(|node| node.type_id == id && !node.private)
+            {
+                return Some((node.scope, false));
+            }
+            return Some((ScopeId::ROOT, false));
+        }
+        None
     }
 
     fn detect_cycles(&self) -> Result<()> {
@@ -355,5 +374,60 @@ impl Container {
         let mut names: Vec<&str> = path[start..].iter().map(|k| self.key_name(*k)).collect();
         names.push(self.key_name(key));
         Error::Cycle(names.join(" -> "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use super::Container;
+    use crate::scope::ScopeId;
+
+    #[test]
+    fn resolve_value_binding_uses_public_supply_module_scope() {
+        let mut container = Container::new();
+        let settings = container.scopes_mut().child(ScopeId::ROOT, "settings");
+        container.insert_value(42u32, settings, false).unwrap();
+
+        assert_eq!(
+            container.resolve_value_binding(TypeId::of::<u32>(), settings),
+            Some((settings, false))
+        );
+        assert_eq!(
+            container.resolve_value_binding(TypeId::of::<u32>(), ScopeId::ROOT),
+            Some((settings, false))
+        );
+    }
+
+    #[test]
+    fn resolve_value_binding_falls_back_to_root_without_value_node_metadata() {
+        let mut container = Container::new();
+        container.insert_value(7u32, ScopeId::ROOT, false).unwrap();
+        container.value_nodes.clear();
+
+        assert_eq!(
+            container.resolve_value_binding(TypeId::of::<u32>(), ScopeId::ROOT),
+            Some((ScopeId::ROOT, false))
+        );
+    }
+
+    #[test]
+    fn resolve_value_binding_uses_private_supply_scope() {
+        #[derive(Clone)]
+        struct Token;
+
+        let mut container = Container::new();
+        let auth = container.scopes_mut().child(ScopeId::ROOT, "auth");
+        container.insert_value(Token, auth, true).unwrap();
+
+        assert_eq!(
+            container.resolve_value_binding(TypeId::of::<Token>(), auth),
+            Some((auth, true))
+        );
+        assert_eq!(
+            container.resolve_value_binding(TypeId::of::<Token>(), ScopeId::ROOT),
+            None
+        );
     }
 }

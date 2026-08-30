@@ -117,3 +117,12 @@ pub(crate) struct GroupRegistration {
     pub(crate) element: TypeId,
     pub(crate) virtual_key: ProviderKey,
 }
+
+/// A value inserted via [`super::storage::insert_value`] (supply / builtins).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValueNode {
+    pub(crate) type_id: TypeId,
+    pub(crate) type_name: &'static str,
+    pub(crate) scope: ScopeId,
+    pub(crate) private: bool,
+}

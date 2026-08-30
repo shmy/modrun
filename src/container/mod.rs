@@ -13,7 +13,9 @@ mod types;
 
 pub(crate) use storage::{pack, seed_builtins};
 pub(crate) use types::ConstructOut;
-pub(crate) use types::{GroupElementKey, GroupRegistration, ProviderKey, TypeIdMap, TypeIdSet};
+pub(crate) use types::{
+    GroupElementKey, GroupRegistration, ProviderKey, TypeIdMap, TypeIdSet, ValueNode,
+};
 
 pub(crate) type DynAny = Arc<dyn Any + Send + Sync>;
 pub(crate) type ArcResolveFn = fn(&DynAny) -> Result<Box<dyn Any + Send + Sync>>;
@@ -39,6 +41,7 @@ pub(crate) struct Container {
     pub(crate) member_values: TypeIdMap<ProviderKey, DynAny>,
     pub(crate) required_groups: TypeIdMap<TypeId, &'static str>,
     pub(crate) next_group_member_id: u32,
+    pub(crate) value_nodes: Vec<ValueNode>,
 }
 
 impl Container {
@@ -64,6 +67,7 @@ impl Container {
             member_values: TypeIdMap::default(),
             required_groups: TypeIdMap::default(),
             next_group_member_id: 0,
+            value_nodes: Vec::new(),
         }
     }
 

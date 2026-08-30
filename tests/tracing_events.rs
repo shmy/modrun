@@ -463,3 +463,31 @@ async fn stop_panic_emits_panicked_not_cancelled() {
         "{logs}"
     );
 }
+
+#[tokio::test]
+async fn dot_graph_emits_trace_event() {
+    let dir = std::env::temp_dir().join(format!("modrun-dot-trace-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("graph.dot");
+
+    let logs = with_logs(|| async {
+        Modrun::builder()
+            .no_banner()
+            .dot_graph(&path)
+            .provide(|| 1u32)
+            .invoke(|_: u32| {})
+            .start()
+            .await
+            .unwrap()
+            .stop()
+            .await
+            .unwrap();
+    })
+    .await;
+
+    assert!(
+        logs.contains("GRAPH") && logs.contains("graph.dot"),
+        "logs: {logs}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

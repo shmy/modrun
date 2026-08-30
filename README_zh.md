@@ -206,6 +206,34 @@ trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
 | `init_group` / `require_group` | 仅组合根；空组 / 非空策略 |
 | `init_group_mut` / `require_group_mut` | 同上，`&mut self` 构建 |
 
+## 依赖图
+
+将接线图导出为 [Graphviz DOT](https://graphviz.org/doc/info/lang.html)，便于文档或排查问题。
+会先执行与构建相同的校验（缺失 provider、循环依赖会报错），但不会运行任何构造函数或 invoker。
+
+```rust
+use modrun::Modrun;
+
+# #[derive(Clone)] struct Config;
+# #[derive(Clone)] struct Server;
+# fn new_config() -> Config { Config }
+# fn new_server(_: Config) -> Server { Server }
+# fn boot(_: Server) {}
+
+// 返回 DOT 字符串（不写文件）
+let dot = Modrun::builder()
+    .provide(new_config)
+    .provide(new_server)
+    .invoke(boot)
+    .render_dot()?;
+# Ok::<(), modrun::Error>(())
+```
+
+启动应用前写出文件时，在传给 [`run`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.run) 的 builder 上链式调用
+[`.dot_graph("modrun.dot")`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.dot_graph)。
+
+节点标注类型、构造函数名与模块作用域（每个 module 一个子图）。实线箭头表示构造 / invoker 依赖；点线连接组成员与其 `Group<T>` 聚合节点。内置的 `Lifecycle`、`Shutdowner` 节点会被省略以保持图面简洁。示例输出见 [docs/graph-sample.dot](docs/graph-sample.dot)。用 `dot -Tpng modrun.dot -o modrun.png` 渲染。
+
 ## 日志
 
 框架事件（provide / supply / invoke / construct / OnStart / OnStop）通过 [`tracing`](https://docs.rs/tracing) 发出，target 为 `modrun`，控制台行是 [uber/fx](https://github.com/uber-go/fx) 风格，例如

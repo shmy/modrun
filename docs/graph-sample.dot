@@ -1,0 +1,20 @@
+// Representative output for:
+//
+//   Modrun::builder()
+//       .provide(new_config)
+//       .provide(new_service)
+//       .invoke(boot)
+//       .render_dot()?;
+//
+// Framework Lifecycle / Shutdowner nodes are omitted. Render with:
+//   dot -Tpng docs/graph-sample.dot -o modrun.png
+
+digraph modrun {
+  rankdir=LR;
+  node [shape=box];
+  n0 [label="Config\nctor=new_config" tooltip="<root>::provider:<root>:Config"];
+  n1 [label="Service\nctor=new_service" tooltip="<root>::provider:<root>:Service"];
+  n2 [label="boot\n(invoker)" tooltip="<root>::invoker:0:boot"];
+  n0 -> n1;
+  n1 -> n2;
+}

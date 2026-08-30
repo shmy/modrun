@@ -199,6 +199,16 @@ pub(crate) fn supplied_group(type_name: &str, scope_name: &'static str, private:
     );
 }
 
+pub(crate) fn dot_graph_written(path: &str) {
+    if tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+        tracing::info!(
+            target: TARGET,
+            path,
+            "{PREFIX} GRAPH\t\twrote dependency graph to {path}"
+        );
+    }
+}
+
 pub(crate) fn before_run(name: &str, scope_name: &'static str) {
     if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
         return;

@@ -443,7 +443,11 @@ impl ModrunBuilder {
         Ok(RunningApp { inner: Some(app) })
     }
 
-    fn into_build_state(mut self, lifecycle: Lifecycle, shutdown: Shutdowner) -> Result<BuildState> {
+    fn into_build_state(
+        mut self,
+        lifecycle: Lifecycle,
+        shutdown: Shutdowner,
+    ) -> Result<BuildState> {
         let dot_graph_path = self.dot_graph_path.take();
         let state = self.prepare_build_state_with(lifecycle, shutdown)?;
         if let Some(path) = dot_graph_path {

@@ -53,7 +53,7 @@ fn register(lc: Lifecycle, greeter: Greeter) -> modrun::Result<()> {
 }
 
 fn greeter_domain() -> Module {
-    Module::new("greeter")
+    Module::builder("greeter")
         .provide_async_private(new_repo)
         .provide(new_greeter)
         .invoke(register)

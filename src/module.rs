@@ -20,7 +20,7 @@ use crate::wiring::{impl_group_wiring_methods, impl_private_wiring_methods, impl
 /// fn register(_greeter: Greeter) {}
 ///
 /// fn greeter_domain() -> Module {
-///     Module::new("greeter")
+///     Module::builder("greeter")
 ///         .provide_private(new_repo)
 ///         .provide(new_greeter)
 ///         .invoke(register)
@@ -52,9 +52,12 @@ impl std::fmt::Debug for Module {
 }
 
 impl Module {
-    /// An empty module. `name` should be unique; it is used only in diagnostics.
+    /// Start wiring a named domain module. `name` should be unique; it is used only
+    /// in diagnostics and dependency graphs.
+    ///
+    /// Symmetric with [`Modrun::builder`](crate::Modrun::builder) at the composition root.
     #[must_use]
-    pub fn new(name: &'static str) -> Self {
+    pub fn builder(name: &'static str) -> Self {
         Self {
             name,
             options: Vec::new(),

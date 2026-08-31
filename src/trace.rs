@@ -16,7 +16,11 @@ pub(crate) const TARGET: &str = "modrun";
 const PREFIX: &str = "[modrun]";
 
 pub(crate) fn start_timer() -> Option<std::time::Instant> {
-    tracing::enabled!(target: TARGET, tracing::Level::INFO).then(std::time::Instant::now)
+    info_enabled().then(std::time::Instant::now)
+}
+
+pub(crate) fn info_enabled() -> bool {
+    tracing::enabled!(target: TARGET, tracing::Level::INFO)
 }
 
 pub(crate) fn elapsed(started: Option<std::time::Instant>) -> Duration {
@@ -210,7 +214,7 @@ pub(crate) fn dot_graph_written(path: &str) {
 }
 
 pub(crate) fn before_run(name: &str, scope_name: &'static str) {
-    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+    if !info_enabled() {
         return;
     }
     let suffix = module_suffix(scope_name);
@@ -223,7 +227,7 @@ pub(crate) fn before_run(name: &str, scope_name: &'static str) {
 }
 
 pub(crate) fn run_ok(name: &str, scope_name: &'static str, runtime: Duration) {
-    if !tracing::enabled!(target: TARGET, tracing::Level::INFO) {
+    if !info_enabled() {
         return;
     }
     let suffix = module_suffix(scope_name);

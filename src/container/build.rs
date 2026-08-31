@@ -91,8 +91,11 @@ impl Container {
                     container.scopes.name(key.scope),
                 )
             };
-            crate::trace::before_run(constructor, module);
-            let timed = crate::trace::start_timer();
+            let trace_info = crate::trace::info_enabled();
+            if trace_info {
+                crate::trace::before_run(constructor, module);
+            }
+            let timed = trace_info.then(std::time::Instant::now);
             let mut call = ConstructCallGuard::new(constructor, module);
             let out = guard.container.construct_at(key);
             guard.container.leave_scope(previous);

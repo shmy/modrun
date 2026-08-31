@@ -44,8 +44,8 @@ async fn multiple_modules_aggregate_in_registration_order() {
 
     Modrun::builder()
         .no_banner()
-        .module(Module::new("user").provide_group(user_route))
-        .module(Module::new("order").provide_group(order_route))
+        .module(Module::builder("user").provide_group(user_route))
+        .module(Module::builder("order").provide_group(order_route))
         .invoke(boot)
         .start()
         .await
@@ -140,7 +140,7 @@ async fn group_member_can_use_private_dependencies() {
     Modrun::builder()
         .no_banner()
         .module(
-            Module::new("user")
+            Module::builder("user")
                 .provide_private(new_repo)
                 .provide_group(user_route),
         )
@@ -489,11 +489,11 @@ async fn nested_modules_aggregate_in_dfs_order() {
     Modrun::builder()
         .no_banner()
         .module(
-            Module::new("api")
-                .module(Module::new("user").provide_group(user))
-                .module(Module::new("order").provide_group(order)),
+            Module::builder("api")
+                .module(Module::builder("user").provide_group(user))
+                .module(Module::builder("order").provide_group(order)),
         )
-        .module(Module::new("payment").provide_group(payment))
+        .module(Module::builder("payment").provide_group(payment))
         .invoke(boot)
         .start()
         .await
@@ -545,7 +545,7 @@ async fn provide_group_on_module_can_use_private_deps() {
     Modrun::builder()
         .no_banner()
         .module(
-            Module::new("user")
+            Module::builder("user")
                 .provide_private(new_repo)
                 .provide_group(user_route),
         )
@@ -577,7 +577,7 @@ async fn private_group_shadows_aggregate_registered_first() {
         .no_banner()
         .provide_group(public_route)
         .module(
-            Module::new("private")
+            Module::builder("private")
                 .provide_private(private_routes)
                 .invoke(boot),
         )
@@ -606,7 +606,7 @@ async fn private_group_shadows_aggregate_registered_last() {
     Modrun::builder()
         .no_banner()
         .module(
-            Module::new("private")
+            Module::builder("private")
                 .provide_private(private_routes)
                 .invoke(boot),
         )
@@ -738,7 +738,7 @@ async fn module_supply_group_aggregates() {
     Modrun::builder()
         .no_banner()
         .module(
-            Module::new("handlers")
+            Module::builder("handlers")
                 .supply_group(Route("a"))
                 .supply_group(Route("b")),
         )
@@ -768,7 +768,7 @@ async fn root_invoker_sees_global_group_when_submodule_has_private_group() {
     Modrun::builder()
         .no_banner()
         .provide_group(public_route)
-        .module(Module::new("private").provide_private(private_routes))
+        .module(Module::builder("private").provide_private(private_routes))
         .invoke(boot)
         .start()
         .await

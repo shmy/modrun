@@ -41,7 +41,7 @@ fn boot(lc: Lifecycle, service: Service) -> modrun::Result<()> {
 }
 
 fn user_domain() -> Module {
-    Module::new("user").provide(new_service).invoke(boot)
+    Module::builder("user").provide(new_service).invoke(boot)
 }
 
 #[tokio::main]

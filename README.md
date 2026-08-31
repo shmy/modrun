@@ -11,7 +11,7 @@ Requires **Rust 1.85** or newer (edition 2024). This is not a general-purpose DI
 container: there are no string qualifiers, no request-scoped objects, no annotations,
 no auto-scanning, and no `get<T>()` after the graph has been built. Two of the same
 type use newtypes; swap test doubles with [`supply`](#concepts) at the composition root.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for stability and API boundaries.
+**API stable since 1.0.0** — see [CONTRIBUTING.md](CONTRIBUTING.md) for stability and API boundaries.
 
 If you have written a `main` that builds a config, then a pool, then a repo, then a
 service, then a server — and a shutdown path that has to unwind all of it in the
@@ -84,6 +84,13 @@ Disable the default `signal` feature if you only use `start()` or wait on
 Most applications only need five registration concepts. Pick the method that matches
 your function signature (sync / async / fallible) — see the [API matrix](#api-matrix) below.
 
+**Entry points** — both are fluent wiring builders:
+
+| Level | Start with | Then |
+|-------|------------|------|
+| Composition root | `Modrun::builder()` | `.module(...)`, `.invoke(boot)`, `.run()` / `.start()` |
+| Domain module | `Module::builder("name")` | `.provide*`, `.invoke(...)`, return via `.module(...)` |
+
 | Verb | Role |
 |------|------|
 | [`provide`](#provide-variants) | Register a constructor; dependencies come from function parameters |
@@ -112,6 +119,9 @@ Only [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder
 [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group),
 [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group),
 [`supply_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.supply_group).
+When at least one module calls `provide_group`, an invoker that depends on `Group<T>` usually
+does **not** need `init_group` — use `init_group` / `require_group` only for empty groups or
+when you must fail the build if no member registered.
 
 ### Common patterns
 
@@ -127,7 +137,7 @@ Three shapes cover most apps. Each maps to an example:
 
 ```text
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide(new_user_service)
         .invoke(register_user_hooks)
@@ -140,8 +150,8 @@ Modrun::builder().module(user_domain()).invoke(boot).run().await
 
 ```text
 Modrun::builder()
-    .module(Module::new("user").provide_group(user_routes))
-    .module(Module::new("order").provide_group(order_routes))
+    .module(Module::builder("user").provide_group(user_routes))
+    .module(Module::builder("order").provide_group(order_routes))
     .invoke(|routes: Group<Route>| mount(routes))
 ```
 
@@ -188,7 +198,7 @@ fn named(log: Logger) -> Logger { /* ... */ log }
 fn new_app_logger(log: Logger) -> AppLogger { AppLogger(named(log)) }
 
 fn logging() -> Module {
-    Module::new("logging")
+    Module::builder("logging")
         .provide_private(new_logger)
         .provide(new_app_logger)
         .invoke(|log: AppLogger| { /* ... */ })
@@ -312,6 +322,32 @@ Connect pools with `provide_result_async` at the composition root (so tests can
 `supply` a fake). Do not open connections inside OnStart unless you want pool
 failure to look like a start-hook failure rather than a constructor error.
 
+## Performance
+
+modrun cost is almost entirely **cold start**: validate the graph, run constructors
+and invokers once, then run lifecycle hooks. There is no service locator or
+background wiring after `start()` — the container is dropped when build finishes.
+
+Typical overhead is small compared to opening databases, binding sockets, or loading
+config. To keep it that way:
+
+* **Prefer `Arc<T>`** for large or widely shared singletons — injection clones cached
+  values; `Arc<T>` is a cheap pointer clone (see above).
+* **Prefer `Arc<Group<T>>` or `Group<Arc<T>>`** when group members are heavy — aggregating
+  `Group<T>` may clone each member (`T: Clone` is required).
+* **Keep modules shallow** when possible — private bindings walk the scope ancestor chain
+  on each resolve (usually a handful of lookups).
+* **Disable framework logging in production** — `default-features = false` skips the
+  optional subscriber; without a subscriber, `tracing` events are no-ops. Use
+  [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)
+  in tests and benchmarks.
+* **Do not enable `dot_graph()` on every start** — DOT export validates and renders the
+  full graph; use it for debugging or CI, not hot paths.
+
+Independent async constructors in the same wave run concurrently on the current task
+(no `tokio::spawn` storm). Run `cargo bench --bench build` locally to compare group
+sizes and module depth.
+
 ## Modules
 
 A `Module` groups related wiring under a name and gives it a private scope.
@@ -327,7 +363,7 @@ use modrun::{Modrun, Module};
 # fn new_user_service(_r: UserRepo) -> UserService { UserService }
 # fn boot_user(_s: UserService) {}
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide(new_user_service)
         .invoke(boot_user)
@@ -367,8 +403,8 @@ use modrun::{Group, Modrun, Module};
 # fn boot(_: Group<Handler>) {}
 
 Modrun::builder()
-    .module(Module::new("user").provide_group(user_handler))
-    .module(Module::new("order").provide_group(order_handler))
+    .module(Module::builder("user").provide_group(user_handler))
+    .module(Module::builder("order").provide_group(order_handler))
     .invoke(boot)
 # ;
 ```
@@ -377,7 +413,9 @@ Inject `Group<T>` (or `Arc<Group<T>>`) in an invoker or constructor; iterate wit
 `for item in group`. Members and injected groups require `T: Clone`; prefer
 `Arc<Group<T>>` when several consumers need the same collection, or return
 `Arc<T>` / `Arc<dyn Trait>` from group member constructors when values are heavy.
-With no members, register the empty group with
+When one or more modules already `provide_group`, root invokers that take `Group<T>` aggregate
+members automatically — no `init_group` call required (see [`handlers`](examples/handlers.rs)).
+With **no** members, register the empty group with
 [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)
 or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)
 (`require_group` also fails the build if the group stays empty; only the composition
@@ -575,7 +613,7 @@ If the module also `provide`s `Repo`, a test `supply(FakeRepo)` will hit
 # fn new_service(_: Repo) -> Service { Service }
 # fn boot(_: Service) {}
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide(new_service)
         .invoke(boot)
 }

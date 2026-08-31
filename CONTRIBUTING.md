@@ -16,7 +16,7 @@ The stable surface is intentionally small:
 | Register constructors | `provide` / `provide_result` / `provide_async` / `provide_result_async` |
 | Pre-built values | `supply` |
 | Graph roots | `invoke` / `invoke_async` |
-| Domain modules | `Module` + `provide_private` |
+| Domain modules | `Module` + `Module::builder("name")` + `provide_private` |
 | Value groups | `Group<T>` + `provide_group*` / `supply_group` / `init_group` / `require_group` |
 | Lifecycle | `Lifecycle`, [`Hook`](src/lifecycle.rs), `task` / `task_with` |
 | Run / stop | `ModrunBuilder::run` / `start`, `RunningApp::stop`, `Shutdowner` |
@@ -26,6 +26,31 @@ minor releases. Constructor and invoker arity stays capped at **eight** paramete
 extra deps in a struct.
 
 MSRV is **1.85** (edition 2024), tracked in `Cargo.toml` and CI.
+
+**Application-facing API is stable since 1.0.0.**
+
+## Semver (since 1.0.0)
+
+| Release | Allowed changes |
+|---------|-----------------|
+| **Patch** | Docs, diagnostics, tracing fields, non-breaking bug fixes |
+| **Minor** | New `Error` variants (`Error` is `#[non_exhaustive]`), new `Hook` methods with **default** impls only, new optional builder knobs that do not change existing call sites |
+| **Major** | Remove or rename public items, change constructor/invoker arity cap (currently **eight**), expose service locator or string-keyed bindings |
+
+**Not covered by stability:** `modrun::__wiring`, `#[doc(hidden)]` builder methods (`provide_dyn`, …),
+and any `pub(crate)` internals.
+
+## Performance expectations
+
+Startup cost is dominated by **your** constructors (I/O, parsing), not the framework.
+modrun validates the graph once, constructs singletons lazily along a precomputed wave
+order, runs invokers, then lifecycle hooks — and drops the container. There is no
+runtime lookup after build.
+
+Documented patterns that keep overhead low: `Arc<T>` for shared heavy deps,
+`Arc<Group<T>>` / `Group<Arc<T>>` for large groups, shallow modules, no `dot_graph()`
+on hot paths, and `default-features = false` when you do not need `logging` / `signal`.
+See README「Performance」/「性能」.
 
 ## Application code vs wrapper authors
 

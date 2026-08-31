@@ -54,7 +54,7 @@ fn new_app_logger(log: Logger) -> AppLogger {
 }
 
 fn logging_domain() -> Module {
-    Module::new("logging")
+    Module::builder("logging")
         .provide_private(new_logger)
         .provide(new_app_logger)
         .invoke(|log: AppLogger| {

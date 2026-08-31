@@ -17,10 +17,10 @@ modrun 是 **Tokio 上的模块化应用组合器**：领域 `Module`、构造�
 | Module / Lifecycle / typed wiring | ✅ 完整 |
 | DAG 并发构造 | ✅ `container/graph.rs` + `build.rs` |
 | 可观测性 | ✅ `trace.rs`，Fx 风格 console + structured fields |
-| Value Groups | ✅ v0.2 — `Group<T>` + `provide_group*` / `supply_group` / `require_group` |
+| Value Groups | ✅ 1.0 — `Group<T>` + `provide_group*` / `supply_group` / `require_group` |
 | Graph 导出 | ✅ `render_dot()` + `.dot_graph(path)` |
 | 横切关注点 | ✅ **文档化** — wrapper 构造函数（`examples/wrap.rs`），无 `decorate` API |
-| API 收敛 | 🔄 README 五动词表、CONTRIBUTING 稳定性承诺 |
+| API 收敛 | ✅ 1.0 — 五动词表、CONTRIBUTING 稳定性承诺、移除 `*_mut` / `Module::new` |
 
 ***
 
@@ -40,7 +40,7 @@ fn app_logger() -> Logger {
 Modrun::builder().provide(app_logger).invoke(boot);
 
 // 模块：私有原始类型 + 公开 newtype / 服务类型
-Module::new("http")
+Module::builder("http")
     .provide_private(new_client)
     .provide(with_timeout)   // fn(Client) -> HttpClient
     .invoke(register_routes)
@@ -48,7 +48,7 @@ Module::new("http")
 
 ### 为何不做 `decorate` API
 
-1. 会再复制一整族 sync/async/fallible × module × `_mut` 方法，扩大 Fx 式表面积。
+1. 会再复制一整族 sync/async/fallible × module 方法，扩大 Fx 式表面积（1.0 前已删除全部公开 `*_mut`）。
 2. wrapper ctor 已是强类型、可测试、IDE 可跳转的 Rust 惯用法。
 3. `provide_private` + `provide` 已覆盖模块边界场景。
 
@@ -78,7 +78,7 @@ Modrun::builder()
 
 ## Phase 2 — Value Groups（已完成）
 
-**状态：✅ v0.2 已交付。** 以下保留为设计参考。
+**状态：✅ 1.0 已交付。** 以下保留为设计参考（历史草案中的 `_mut` / `Module::new` 已在 1.0 移除）。
 
 ### 动机
 
@@ -119,8 +119,8 @@ Modrun::builder()
     .require_group::<Handler>();
 ```
 
-各方法均有 `_mut` 变体（与 `provide` / `supply` 一致）。`init_group` / `require_group` 仅
-[`ModrunBuilder`](crate::ModrunBuilder) 可用（组合根策略）。
+\~~各方法均有 `_mut` 变体~~ — **1.0 起无公开 `*_mut`**；在 consuming `self` 上链式调用。
+`init_group` / `require_group` 仅 [`ModrunBuilder`](crate::ModrunBuilder) 可用（组合根策略）。
 
 模块内组成员可依赖 [`provide_private`](crate::Module::provide_private) 的类型，使用
 普通 `provide_group` 即可（无 `_private` 变体）。
@@ -284,7 +284,7 @@ fn user_routes(repo: UserRepo) -> Route {
 }
 
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide_group(user_routes)
 }
@@ -308,7 +308,7 @@ fn order_routes(_repo: OrderRepo) -> Route {
 }
 
 fn order_domain() -> Module {
-    Module::new("order")
+    Module::builder("order")
         .provide_async_private(connect_order_repo)
         .provide_group_async(order_routes)
 }
@@ -316,7 +316,7 @@ fn order_domain() -> Module {
 // ── plugin domain（无路由贡献者）──────────────────────────
 
 fn plugin_domain() -> Module {
-    Module::new("plugin")
+    Module::builder("plugin")
     // 不提供 Route 成员；组合根须 init_group 才能注入 Group<Route>
 }
 
@@ -418,7 +418,7 @@ fn new_email_handler() -> Arc<dyn EventHandler> {
 }
 
 fn events_domain() -> Module {
-    Module::new("events")
+    Module::builder("events")
         .provide_group(new_email_handler)
 }
 
@@ -437,7 +437,7 @@ fn boot(handlers: Group<Arc<dyn EventHandler>>) {
 | `container/graph.rs` | `collect_pending` 遇到 `Group<T>` 时收集所有成员；cycle 检测需包含 group 边 |
 | `deps.rs` | invoker / ctor 参数支持 `Group<T>` 解析 |
 | `provide.rs` | `GroupProvider` option；复用 `ProviderFn` / `FallibleProviderFn` / `AsyncProviderFn` / `FallibleAsyncProviderFn`；不写入 `public_index` |
-| `wiring.rs` | `.provide_group*` / `.supply_group*` / `.provide_group_dyn` 及 `_mut` 变体 |
+| `wiring.rs` | `.provide_group*` / `.supply_group*` / hidden `.provide_group_dyn` |
 | `trace.rs` | `PROVIDE GROUP` / `SUPPLY GROUP` 事件 |
 
 ### 测试
@@ -467,8 +467,8 @@ fn boot(handlers: Group<Arc<dyn EventHandler>>) {
 
 | 版本 | 内容 |
 |------|------|
-| v0.2.0 | `Group<T>` + 四种 `provide_group_*` + `supply_group` + `provide_group_dyn` + 显式空组注册 + `require_group` |
-| v0.x+1 | `decorate_group`（依赖 Phase 1） |
+| 1.0.0 | `Group<T>` + 四种 `provide_group_*` + `supply_group` + hidden `provide_group_dyn` + 显式空组注册 + `require_group` |
+| — | `decorate_group` — **不做**（wrapper ctor 已够用） |
 
 ***
 
@@ -585,7 +585,7 @@ digraph {
 ✅ Phase 2 Groups
 ✅ Phase 3 Graph DOT
 ✅ Phase 1 横切 — wrapper ctor 文档化（无 decorate API）
-🔄 稳定性与文档收敛（CONTRIBUTING、五动词表、示例）
+✅ 1.0 稳定性与文档收敛（CONTRIBUTING semver、五动词表、示例）
 ⏭ 可选：startup profile、test helpers、render_tree()
 ```
 
@@ -615,7 +615,7 @@ digraph {
 
 ```rust
 fn http_module() -> Module {
-    Module::new("http")
+    Module::builder("http")
         .provide_private(new_client)
         .provide(with_metrics)          // fn(Client) -> HttpClient (newtype)
         .provide_group(logging_mw)

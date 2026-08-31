@@ -33,13 +33,13 @@ async fn domain_modules_with_private_deps() {
 
     Modrun::builder()
         .module(
-            Module::new("user")
+            Module::builder("user")
                 .provide_private(new_user_repo)
                 .provide(new_user_service)
                 .invoke(boot_user),
         )
         .module(
-            Module::new("order")
+            Module::builder("order")
                 .provide_private(new_order_repo)
                 .provide(new_order_service)
                 .invoke(boot_order),
@@ -69,7 +69,7 @@ async fn module_constructor_can_depend_on_arc_of_private_provider() {
 
     Modrun::builder()
         .module(
-            Module::new("domain")
+            Module::builder("domain")
                 .provide_private(new_config)
                 .provide(new_service)
                 .invoke(boot),
@@ -93,7 +93,7 @@ async fn private_not_visible_outside_module() {
     fn needs_secret(_s: Secret) {}
 
     let err = Modrun::builder()
-        .module(Module::new("user").provide_private(new_secret))
+        .module(Module::builder("user").provide_private(new_secret))
         .invoke(needs_secret)
         .start()
         .await
@@ -131,8 +131,16 @@ async fn sibling_private_providers_are_not_a_cycle() {
 
     Modrun::builder()
         .provide(new_shared)
-        .module(Module::new("a").provide_private(new_repo_a).invoke(check_a))
-        .module(Module::new("b").provide_private(new_repo_b).invoke(check_b))
+        .module(
+            Module::builder("a")
+                .provide_private(new_repo_a)
+                .invoke(check_a),
+        )
+        .module(
+            Module::builder("b")
+                .provide_private(new_repo_b)
+                .invoke(check_b),
+        )
         .start()
         .await
         .unwrap()
@@ -157,12 +165,12 @@ async fn sibling_domains_can_share_same_private_type() {
 
     Modrun::builder()
         .module(
-            Module::new("a")
+            Module::builder("a")
                 .supply_private(LocalConfig { name: "a" })
                 .invoke(boot_a),
         )
         .module(
-            Module::new("b")
+            Module::builder("b")
                 .supply_private(LocalConfig { name: "b" })
                 .invoke(boot_b),
         )
@@ -190,7 +198,7 @@ async fn private_provider_shadows_cached_public_value() {
     Modrun::builder()
         .supply(Config("public"))
         .module(
-            Module::new("domain")
+            Module::builder("domain")
                 .provide_private(private_config)
                 .invoke(check),
         )
@@ -221,7 +229,7 @@ async fn supplied_private_value_breaks_apparent_cycle() {
     Modrun::builder()
         .provide(new_b)
         .module(
-            Module::new("domain")
+            Module::builder("domain")
                 .supply_private(B)
                 .provide(new_a)
                 .invoke(use_a),
@@ -256,7 +264,7 @@ async fn same_scope_public_can_decorate_private() {
     // the public constructor still sees the private one from its own scope.
     Modrun::builder()
         .module(
-            Module::new("domain")
+            Module::builder("domain")
                 .provide_private(private_label)
                 .provide(public_label),
         )
@@ -286,10 +294,10 @@ async fn nested_child_uses_parent_private_provider() {
 
     Modrun::builder()
         .module(
-            Module::new("parent")
+            Module::builder("parent")
                 .provide_private(new_parent_secret)
                 .module(
-                    Module::new("child")
+                    Module::builder("child")
                         .provide(new_child_svc)
                         .invoke(boot_child),
                 ),
@@ -314,8 +322,8 @@ async fn parent_invoke_cannot_use_child_private_provider() {
 
     let err = Modrun::builder()
         .module(
-            Module::new("parent")
-                .module(Module::new("child").provide_private(new_child_secret))
+            Module::builder("parent")
+                .module(Module::builder("child").provide_private(new_child_secret))
                 .invoke(needs_secret),
         )
         .start()

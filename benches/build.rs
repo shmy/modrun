@@ -51,7 +51,7 @@ fn build_deep_modules(c: &mut Criterion) {
             }
             fn use_leaf(_: Leaf) {}
 
-            let mut module = Module::new("m0").provide_private(leaf).invoke(use_leaf);
+            let mut module = Module::builder("m0").provide_private(leaf).invoke(use_leaf);
             for i in 1..12 {
                 // Nested modules deepen the ancestor walk.
                 let name: &'static str = match i {
@@ -67,7 +67,7 @@ fn build_deep_modules(c: &mut Criterion) {
                     10 => "m10",
                     _ => "m11",
                 };
-                module = Module::new(name).module(module);
+                module = Module::builder(name).module(module);
             }
 
             Modrun::builder()

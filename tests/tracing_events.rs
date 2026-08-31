@@ -71,7 +71,7 @@ async fn emits_fx_style_lifecycle_events() {
     let logs = with_logs(|| async {
         Modrun::builder()
             .supply(Config)
-            .module(Module::new("app").provide(new_service).invoke(boot))
+            .module(Module::builder("app").provide(new_service).invoke(boot))
             .start()
             .await
             .unwrap()
@@ -227,7 +227,7 @@ async fn invoking_logs_function_and_filters_framework_deps() {
     let logs = with_logs(|| async {
         Modrun::builder()
             .supply(Config)
-            .module(Module::new("http").invoke(register_http))
+            .module(Module::builder("http").invoke(register_http))
             .start()
             .await
             .unwrap()

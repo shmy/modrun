@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+* Group aggregation collects members without cloning the member key list.
+* Constructor trace path checks `tracing` INFO once per provider when logging is off.
+
+## \[1.0.0] - 2026-08-31
+
+First stable release. Application-facing API is frozen; see [CONTRIBUTING.md](CONTRIBUTING.md)
+for the stability promise and semver rules. Type-erased wiring in [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html)
+remains intentionally unstable relative to typed `provide` / `invoke`.
+
 ### Added
 
 * [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html): multiple modules contribute values of the same type; inject `Group<T>` or `Arc<Group<T>>`. Register members with `provide_group` / `provide_group_result` / `provide_group_async` / `provide_group_result_async`, `supply_group`, or hidden `provide_group_dyn`. Empty groups need [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group) or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group) (`require_group` also rejects emptiness at build time). Members require `T: Clone`. `handlers` example.
@@ -22,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * **Breaking:** removed all public `*_mut` builder methods (`provide_mut`, `module_mut`, `build_timeout_mut`, …). Chain on consuming `self` instead.
+* **Breaking:** removed `Module::new`; use `Module::builder("name")` (symmetric with `Modrun::builder()`).
 * Positioning and docs: modular application **composer** (not generic DI); API matrix and three common patterns (domain module / group / wrapper) in README.
 * Type-erased wiring moved to hidden [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html); `provide_dyn` / `invoke_dyn` / `provide_group_dyn` are `#[doc(hidden)]`.
 * MSRV lowered from 1.88 to **1.85** (edition 2024 floor; let-chains are unused). CI checks the library with `cargo test` (not `--all-targets`) so examples/benches are not bound to that MSRV.

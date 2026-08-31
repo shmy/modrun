@@ -50,7 +50,7 @@ fn user_handler(_repo: UserRepo) -> Handler {
 }
 
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide_group(user_handler)
 }
@@ -68,7 +68,7 @@ fn order_handler(_repo: OrderRepo) -> Handler {
 }
 
 fn order_domain() -> Module {
-    Module::new("order")
+    Module::builder("order")
         .provide_async_private(connect_order_repo)
         .provide_group(order_handler)
 }

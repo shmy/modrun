@@ -67,18 +67,34 @@ impl Container {
             .map(|reg| reg.virtual_key)
     }
 
-    pub(crate) fn group_members_for_element(&self, element: TypeId) -> Option<&[ProviderKey]> {
-        self.group_members
-            .get(&GroupElementKey { element })
-            .map(Vec::as_slice)
-    }
-
     pub(crate) fn store_group_member(&mut self, key: ProviderKey, value: super::DynAny) {
         self.member_values.insert(key, value);
     }
 
     pub(crate) fn take_group_member(&mut self, key: ProviderKey) -> Option<super::DynAny> {
         self.member_values.remove(&key)
+    }
+
+    fn collect_group_member_values<T: Clone + Send + Sync + 'static>(
+        &mut self,
+        element: TypeId,
+        group_name: &'static str,
+    ) -> Result<Vec<T>> {
+        let element_key = GroupElementKey { element };
+        let len = self
+            .group_members
+            .get(&element_key)
+            .map(|members| members.len())
+            .unwrap_or(0);
+        let mut items = Vec::with_capacity(len);
+        for i in 0..len {
+            let key = self.group_members.get(&element_key).expect("group members")[i];
+            let value = self
+                .take_group_member(key)
+                .ok_or_else(|| Error::NotConstructed(group_name))?;
+            items.push(take_packed_member::<T>(value)?);
+        }
+        Ok(items)
     }
 
     fn ensure_group_virtual<T: Clone + Send + Sync + 'static>(
@@ -137,16 +153,6 @@ fn aggregate_group<T: Clone + Send + Sync + 'static>(
     element: TypeId,
     group_name: &'static str,
 ) -> Result<Constructed> {
-    let members = container
-        .group_members_for_element(element)
-        .map(<[ProviderKey]>::to_vec)
-        .unwrap_or_default();
-    let mut items = Vec::with_capacity(members.len());
-    for key in members {
-        let value = container
-            .take_group_member(key)
-            .ok_or_else(|| Error::NotConstructed(group_name))?;
-        items.push(take_packed_member::<T>(value)?);
-    }
+    let items = container.collect_group_member_values::<T>(element, group_name)?;
     Ok(pack(Group::from_vec(items)))
 }

@@ -103,7 +103,7 @@
 //! fn boot_user(_svc: UserService) {}
 //!
 //! fn user_domain() -> Module {
-//!     Module::new("user")
+//!     Module::builder("user")
 //!         .provide_private(new_user_repo)
 //!         .provide(new_user_service)
 //!         .invoke(boot_user)
@@ -167,10 +167,14 @@
 //! # Stability
 //!
 //! The public model is type-keyed singletons, [`Group<T>`] value groups, lazy
-//! `provide`, `invoke` as the graph root, and start/stop via [`Lifecycle`]. There
-//! are no string qualifiers and no service locator after build. [`Hook`] methods
-//! will only grow with defaults. Constructors and invokers accept at most eight
-//! parameters; pack extra deps in a struct. MSRV is **1.85** (edition 2024).
+//! `provide`, `invoke` as the graph root, and start/stop via [`Lifecycle`].
+//! Domain wiring uses [`Module::builder`] (symmetric with [`Modrun::builder`]).
+//! There are no string qualifiers and no service locator after build. [`Hook`]
+//! methods will only grow with defaults. Constructors and invokers accept at most
+//! eight parameters; pack extra deps in a struct. MSRV is **1.85** (edition 2024).
+//! **Application-facing API is stable since 1.0.0**; see CONTRIBUTING.md.
+//! Startup overhead is mostly your constructors; the container is dropped after build.
+//! Prefer `Arc<T>` and `Arc<Group<T>>` for heavy deps — see README「Performance」.
 //! Examples may need a newer compiler via their own dependencies (the MSRV job
 //! does not compile `--all-targets`).
 //!

@@ -90,7 +90,7 @@ fn render_dot_module_private_nodes() {
     let dot = Modrun::builder()
         .no_banner()
         .module(
-            Module::new("user")
+            Module::builder("user")
                 .provide_private(new_repo)
                 .provide(new_svc)
                 .invoke(boot_user),
@@ -149,8 +149,8 @@ fn render_dot_group_membership_edges() {
 
     let dot = Modrun::builder()
         .no_banner()
-        .module(Module::new("user").provide_group(user_route))
-        .module(Module::new("order").provide_group(order_route))
+        .module(Module::builder("user").provide_group(user_route))
+        .module(Module::builder("order").provide_group(order_route))
         .invoke(boot)
         .render_dot()
         .unwrap();
@@ -224,7 +224,7 @@ fn render_dot_module_public_supply_edge() {
     let dot = Modrun::builder()
         .no_banner()
         .module(
-            Module::new("settings")
+            Module::builder("settings")
                 .supply(Settings { port: 9000 })
                 .provide(new_service),
         )
@@ -258,7 +258,7 @@ fn render_dot_module_private_supply_edge() {
     let dot = Modrun::builder()
         .no_banner()
         .module(
-            Module::new("auth")
+            Module::builder("auth")
                 .supply_private(Token)
                 .provide(new_service),
         )
@@ -293,7 +293,7 @@ fn render_dot_provide_private_with_arc_dependency() {
     let dot = Modrun::builder()
         .no_banner()
         .module(
-            Module::new("domain")
+            Module::builder("domain")
                 .provide_private(new_config)
                 .provide(new_service),
         )
@@ -319,7 +319,7 @@ fn render_dot_escapes_special_module_names() {
 
     let dot = Modrun::builder()
         .no_banner()
-        .module(Module::new("we\"ird").provide(make_widget))
+        .module(Module::builder("we\"ird").provide(make_widget))
         .render_dot()
         .unwrap();
 
@@ -379,8 +379,8 @@ fn render_dot_distinct_clusters_for_dash_and_underscore_modules() {
 
     let dot = Modrun::builder()
         .no_banner()
-        .module(Module::new("a-b").provide(make_a))
-        .module(Module::new("a_b").provide(make_b))
+        .module(Module::builder("a-b").provide(make_a))
+        .module(Module::builder("a_b").provide(make_b))
         .render_dot()
         .unwrap();
 

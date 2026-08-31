@@ -54,7 +54,7 @@ async fn shared_counter_lifecycle() {
     let app = Modrun::builder()
         .supply(Config)
         .supply(Counter(Arc::clone(&shared)))
-        .module(Module::new("app").invoke(boot))
+        .module(Module::builder("app").invoke(boot))
         .start()
         .await
         .unwrap();

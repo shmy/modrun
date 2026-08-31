@@ -6,7 +6,7 @@
 
 把大型 Tokio 服务拆成面向领域的模块：构造函数注入、显式模块边界、统一生命周期编排——在组合根一次性接线。
 
-需要 **Rust 1.85** 或更高版本（edition 2024）。这不是通用 DI 容器：没有字符串 qualifier、没有请求级对象、没有注解、没有自动扫描，图构建完成之后也不能 `get<T>()`。两个同类依赖用 newtype 区分；测试替身在组合根用 [`supply`](#概念) 替换。稳定性与 API 边界见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+需要 **Rust 1.85** 或更高版本（edition 2024）。这不是通用 DI 容器：没有字符串 qualifier、没有请求级对象、没有注解、没有自动扫描，图构建完成之后也不能 `get<T>()`。两个同类依赖用 newtype 区分；测试替身在组合根用 [`supply`](#概念) 替换。**自 1.0.0 起 API 稳定** — 稳定性承诺与 semver 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 如果你写过这样的 `main`——先造 config，再造连接池，再造 repo，再造 service，再造 server，停机时还得按相反顺序拆掉——modrun 就是把这段 `main` 写一次。
 
@@ -71,6 +71,13 @@ async fn main() -> modrun::Result<()> {
 
 大多数应用只需要五个注册概念。按函数签名（sync / async / 可失败）选方法——见下方 [API 矩阵](#api-矩阵)。
 
+**入口**（两者都是 fluent wiring builder，不是 runtime service locator）：
+
+| 层级 | 起点 | 之后 |
+|------|------|------|
+| 组合根 | `Modrun::builder()` | `.module(...)`、`.invoke(boot)`、`.run()` / `.start()` |
+| 领域模块 | `Module::builder("name")` | `.provide*`、`.invoke(...)`，经 `.module(...)` 挂到根 |
+
 | 动词 | 作用 |
 |------|------|
 | [`provide`](#provide-变体) | 注册构造函数；依赖来自函数参数 |
@@ -97,6 +104,8 @@ async fn main() -> modrun::Result<()> {
 [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)、
 [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)、
 [`supply_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.supply_group)。
+只要至少有一个模块 `provide_group`，依赖 `Group<T>` 的 invoker 通常**不必**调用 `init_group`；
+`init_group` / `require_group` 仅用于空组，或必须在构建期拒绝「零成员」时。
 
 ### 三种常见模式
 
@@ -112,7 +121,7 @@ async fn main() -> modrun::Result<()> {
 
 ```text
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide(new_user_service)
         .invoke(register_user_hooks)
@@ -125,8 +134,8 @@ Modrun::builder().module(user_domain()).invoke(boot).run().await
 
 ```text
 Modrun::builder()
-    .module(Module::new("user").provide_group(user_routes))
-    .module(Module::new("order").provide_group(order_routes))
+    .module(Module::builder("user").provide_group(user_routes))
+    .module(Module::builder("order").provide_group(order_routes))
     .invoke(|routes: Group<Route>| mount(routes))
 ```
 
@@ -165,7 +174,7 @@ fn named(log: Logger) -> Logger { /* ... */ log }
 fn new_app_logger(log: Logger) -> AppLogger { AppLogger(named(log)) }
 
 fn logging() -> Module {
-    Module::new("logging")
+    Module::builder("logging")
         .provide_private(new_logger)
         .provide(new_app_logger)
         .invoke(|log: AppLogger| { /* ... */ })
@@ -235,6 +244,20 @@ struct ReplicaDb(Arc<PgPool>);
 
 连接池用 `provide_result_async` 放在组合根（这样测试才能 `supply` 假实现）。不要在 OnStart 里建连，除非你希望连接失败看起来像 start-hook 失败，而不是构造函数错误。
 
+## 性能
+
+modrun 的开销几乎全在 **冷启动**：校验图、一次性跑完构造函数与 invoker、再跑 lifecycle hook。`start()` 之后没有 service locator，也没有后台接线——容器在 build 结束时会被 drop。
+
+和连数据库、绑端口、读配置相比，框架本身通常可以忽略。建议：
+
+* **大对象或广泛共享的单例用 `Arc<T>`** — 按值注入会 clone 缓存；`Arc<T>` 只增引用计数（见上文）。
+* **Group 成员较重时用 `Arc<Group<T>>` 或 `Group<Arc<T>>`** — 聚合 `Group<T>` 可能逐个 clone 成员（要求 `T: Clone`）。
+* **模块嵌套尽量浅** — 私有绑定解析会沿 scope 祖先链查找（通常几次 HashMap 查找）。
+* **生产环境关闭框架日志** — `default-features = false` 不装可选 subscriber；无 subscriber 时 `tracing` 事件几乎无成本。测试与 benchmark 用 [`.no_banner()`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.no_banner)。
+* **不要在每次启动都开 `dot_graph()`** — DOT 会校验并渲染整图；仅调试或 CI 使用。
+
+同一 wave 内独立的 async 构造函数会在当前 task 上并发 poll（不会 `tokio::spawn` 风暴）。本地可跑 `cargo bench --bench build` 对比 group 规模与 module 深度。
+
 ## 模块
 
 `Module` 把相关装配收在一个名字下，并给出私有作用域。
@@ -249,7 +272,7 @@ use modrun::{Modrun, Module};
 # fn new_user_service(_r: UserRepo) -> UserService { UserService }
 # fn boot_user(_s: UserService) {}
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide_private(new_user_repo)
         .provide(new_user_service)
         .invoke(boot_user)
@@ -288,8 +311,8 @@ use modrun::{Group, Modrun, Module};
 # fn boot(_: Group<Handler>) {}
 
 Modrun::builder()
-    .module(Module::new("user").provide_group(user_handler))
-    .module(Module::new("order").provide_group(order_handler))
+    .module(Module::builder("user").provide_group(user_handler))
+    .module(Module::builder("order").provide_group(order_handler))
     .invoke(boot)
 # ;
 ```
@@ -297,7 +320,9 @@ Modrun::builder()
 在 invoker 或构造函数里注入 `Group<T>`（或 `Arc<Group<T>>`），用 `for item in group` 遍历。
 组成员与注入的组都要求 `T: Clone`；多个消费者共享同一集合时优先用 `Arc<Group<T>>`，
 值较重时让组成员构造函数返回 `Arc<T>` / `Arc<dyn Trait>`。
-没有任何成员时，用
+已有模块 `provide_group` 时，组合根上依赖 `Group<T>` 的 invoker 会自动聚合成员，无需
+`init_group`（见 [`handlers`](examples/handlers.rs)）。
+**没有任何成员**时，用
 [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)
 或
 [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)
@@ -442,7 +467,7 @@ app.stop().await
 # fn new_service(_: Repo) -> Service { Service }
 # fn boot(_: Service) {}
 fn user_domain() -> Module {
-    Module::new("user")
+    Module::builder("user")
         .provide(new_service)
         .invoke(boot)
 }

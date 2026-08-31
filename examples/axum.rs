@@ -76,7 +76,7 @@ fn register_http(lc: Lifecycle, cfg: Config, state: AppState) -> modrun::Result<
 }
 
 fn http_domain() -> Module {
-    Module::new("http")
+    Module::builder("http")
         .provide_private(new_greeter)
         .provide(new_state)
         .invoke(register_http)

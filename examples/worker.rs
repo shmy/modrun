@@ -57,7 +57,7 @@ fn boot(lc: Lifecycle, primary: PrimaryPool, replica: ReplicaPool) -> modrun::Re
 }
 
 fn store() -> Module {
-    Module::new("store")
+    Module::builder("store")
         .provide_result_async(connect_primary)
         .provide_result_async(connect_replica)
         .invoke(boot)

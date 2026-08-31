@@ -1,4 +1,8 @@
-//! modrun — lightweight app wiring for Tokio services.
+//! modrun — a modular application composer for Rust.
+//!
+//! Build large Tokio services as domain-oriented [`Module`]s with constructor
+//! injection, explicit module boundaries, and coordinated lifecycle — wired once
+//! at the composition root.
 //!
 //! Register constructors, pull the graph with invokers, and manage start/stop
 //! via [`Lifecycle`].
@@ -172,7 +176,7 @@
 //!
 //! Application code should use [`ModrunBuilder::provide`] /
 //! [`ModrunBuilder::invoke`], not the [`ProviderFn`] / [`ProviderMarker`] marker types
-//! (except when wrapping the wiring API).
+//! or [`ModrunBuilder::provide_dyn`] / [`ModrunBuilder::invoke_dyn`] (wrapper authors only).
 //!
 //! # Crate features
 //!

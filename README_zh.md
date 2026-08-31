@@ -2,9 +2,11 @@
 
 [English](README.md) | 简体中文
 
-面向 Tokio 服务的轻量装配层：注册构造函数、拉取依赖图，并在一处管理启动/停止。
+**面向 Rust 的模块化应用组合器。**
 
-需要 **Rust 1.85** 或更高版本（edition 2024）。这不是通用 DI 容器：没有字符串 qualifier、没有请求级对象，图构建完成之后也不能 `get<T>()`。两个同类依赖用 newtype 区分；测试替身在组合根用 [`supply`](#概念) 替换。
+把大型 Tokio 服务拆成面向领域的模块：构造函数注入、显式模块边界、统一生命周期编排——在组合根一次性接线。
+
+需要 **Rust 1.85** 或更高版本（edition 2024）。这不是通用 DI 容器：没有字符串 qualifier、没有请求级对象、没有注解、没有自动扫描，图构建完成之后也不能 `get<T>()`。两个同类依赖用 newtype 区分；测试替身在组合根用 [`supply`](#概念) 替换。稳定性与 API 边界见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 如果你写过这样的 `main`——先造 config，再造连接池，再造 repo，再造 service，再造 server，停机时还得按相反顺序拆掉——modrun 就是把这段 `main` 写一次。
 
@@ -65,8 +67,66 @@ async fn main() -> modrun::Result<()> {
 
 ## 概念
 
+### 五个接线动词
+
+大多数应用只需要五个注册概念。其余变体只是 sync/async、可失败/不可失败，或 `_mut`（`&mut self` 构建器）的区别。
+
+| 动词 | 作用 |
+|------|------|
+| [`provide`](#provide-变体) | 注册构造函数；依赖来自函数参数 |
+| [`supply`](#supply) | 注入已有值，跳过构造函数 |
+| [`invoke`](#invoke) | 拉取依赖图；invoker 参数决定哪些类型会被构造 |
+| [`module`](#模块) | 把领域装配收在命名模块与私有作用域下 |
+| [`provide_group`](#值组groups) | 向 [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html) 贡献一个成员 |
+
+### Provide 变体
+
+按构造函数签名选方法——不是新的 DI 概念：
+
+| 方法 | 构造函数 |
+|------|----------|
+| `provide` | `fn(...) -> T` |
+| `provide_result` | `fn(...) -> Result<T, E>` |
+| `provide_async` | `async fn(...) -> T` |
+| `provide_result_async` | `async fn(...) -> Result<T, E>` |
+
+返回 `Result` 的构造函数交给普通 `provide` 会 **编译失败**（编译器会指向 `provide_result`）。组成员用 `provide_group_*` 前缀，同样四选一。[`provide_dyn`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_dyn) 等仅给 **wrapper 库** 用；应用代码应注册普通函数。
+
+### 横切关注点（wrapper 构造函数）
+
+modrun **不会** 增加 `decorate` API。横切逻辑用普通 Rust 函数表达。每种类型只能 `provide` 一次——在 **一个** 构造函数里组合 wrapper，或在模块里返回 **newtype / 服务结构体**（`provide_private` 放原始值，公开 `provide` 返回包装后的不同类型）：
+
+```rust
+use modrun::{Modrun, Module};
+
+#[derive(Clone, PartialEq, Eq)]
+struct Logger { name: &'static str }
+
+#[derive(Clone, PartialEq, Eq)]
+struct AppLogger(Logger); // 公开 binding ≠ 私有原始类型
+
+fn new_logger() -> Logger { Logger { name: "default" } }
+fn named(log: Logger) -> Logger { /* ... */ log }
+fn new_app_logger(log: Logger) -> AppLogger { AppLogger(named(log)) }
+
+fn logging() -> Module {
+    Module::new("logging")
+        .provide_private(new_logger)
+        .provide(new_app_logger)
+        .invoke(|log: AppLogger| { /* ... */ })
+}
+
+Modrun::builder().module(logging());
+```
+
+组合根只需一个合成构造函数：`fn app_logger() -> Logger { ... }` 即可。详见 [`examples/wrap.rs`](examples/wrap.rs)。
+
+### Provide
+
 **`provide`** 注册构造函数。没有人要这个类型之前不会构造，每种类型最多构造一次。返回 `Result<T, E>` 的构造函数必须用 `provide_result`（或 `provide_result_async`）；交给普通 `provide` 是编译错误。`provide_async` 和 `provide_result_async` 接受 `async fn`。
 若干彼此独立的构造函数需要同时出现时，modrun 按 DAG 层构建：**同一层的 async** 构造函数在一个任务上并发 poll；**sync** 构造函数在 `construct()` 里跑完，并推迟该层后续 future 的创建。共享依赖仍然先跑，再按依赖顺序继续。
+
+### Supply
 
 **`supply`** 把已经有的值交给容器，跳过构造函数。
 
@@ -192,8 +252,7 @@ trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
 [`provide_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_group)。
 同一元素类型要分多组时，用 newtype（与单例重复时一样）。
 
-**方法矩阵**（[`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
-[`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上均有对应 `_mut` 变体）：
+**方法矩阵**（组成员与上面四种 `provide_*` 变体对称）：
 
 | 注册 | 场景 |
 |------|------|
@@ -202,9 +261,10 @@ trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
 | `provide_group_async` | 异步、不可失败 |
 | `provide_group_result_async` | 异步、`Result` |
 | `supply_group` | 已有实例 |
-| `provide_group_dyn` | 擦除后的 ctor（`into_provider()`） |
 | `init_group` / `require_group` | 仅组合根；空组 / 非空策略 |
-| `init_group_mut` / `require_group_mut` | 同上，`&mut self` 构建 |
+
+`provide_group_dyn` 仅给 wrapper 库（规则同 `provide_dyn`）。所有方法在 [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
+[`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上也有 `_mut` 变体。
 
 ## 依赖图
 
@@ -398,6 +458,7 @@ cargo run --example basic    # 领域模块、私有依赖、async 构造函数
 cargo run --example handlers # 多模块向 Group 贡献成员
 cargo run --example worker   # newtype 连接池 + 在 Stopped 上 select 的 task
 cargo run --example swap     # 在组合根 supply 假实现（测试）
+cargo run --example wrap     # wrapper 构造函数处理横切关注点
 cargo run --example axum     # HTTP 服务：task_with 在 OnStart 里 bind，再 serve
 ```
 

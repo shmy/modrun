@@ -2,13 +2,16 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Lightweight application wiring for Tokio services: register constructors, pull the
-dependency graph, and manage start/stop in one place.
+**A modular application composer for Rust.**
+
+Build large Tokio services as domain-oriented modules with constructor injection,
+explicit module boundaries, and coordinated lifecycle — wired once at the composition root.
 
 Requires **Rust 1.85** or newer (edition 2024). This is not a general-purpose DI
-container: there are no string qualifiers, no request-scoped objects, and no
-`get<T>()` after the graph has been built. Two of the same type use newtypes;
-swap test doubles with [`supply`](#concepts) at the composition root.
+container: there are no string qualifiers, no request-scoped objects, no annotations,
+no auto-scanning, and no `get<T>()` after the graph has been built. Two of the same
+type use newtypes; swap test doubles with [`supply`](#concepts) at the composition root.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for stability and API boundaries.
 
 If you have written a `main` that builds a config, then a pool, then a repo, then a
 service, then a server — and a shutdown path that has to unwind all of it in the
@@ -76,6 +79,71 @@ Disable the default `signal` feature if you only use `start()` or wait on
 
 ## Concepts
 
+### Five wiring verbs
+
+Most applications only need five registration concepts. Everything else is a variant
+(sync vs async, fallible vs infallible, or `_mut` for `&mut self` builders).
+
+| Verb | Role |
+|------|------|
+| [`provide`](#provide-variants) | Register a constructor; dependencies come from function parameters |
+| [`supply`](#supply) | Hand in a value you already have; skip the constructor |
+| [`invoke`](#invoke) | Pull the graph; invoker parameters are the roots of what gets built |
+| [`module`](#modules) | Group domain wiring under a name with a private scope |
+| [`provide_group`](#groups) | Contribute one member to a [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html) aggregate |
+
+### Provide variants
+
+Pick the method that matches your constructor signature — not a separate DI concept:
+
+| Method | Constructor |
+|--------|-------------|
+| `provide` | `fn(...) -> T` |
+| `provide_result` | `fn(...) -> Result<T, E>` |
+| `provide_async` | `async fn(...) -> T` |
+| `provide_result_async` | `async fn(...) -> Result<T, E>` |
+
+Returning `Result` from plain `provide` is a **compile error** (modrun points you at
+`provide_result`). Group members follow the same four-way split with a `provide_group_*`
+prefix. [`provide_dyn`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_dyn)
+and friends are for **wrapper libraries only**; application code should register plain functions.
+
+### Cross-cutting concerns (wrapper constructors)
+
+modrun will not add a `decorate` API. Horizontal concerns (metrics, named loggers,
+timeouts) are ordinary Rust functions. Each type can only be `provide`d once — compose
+wrappers inside **one** constructor, or return a **newtype / service struct** from a
+module (`provide_private` for the raw value, public `provide` for the wrapped type):
+
+```rust
+use modrun::{Modrun, Module};
+
+#[derive(Clone, PartialEq, Eq)]
+struct Logger { name: &'static str }
+
+#[derive(Clone, PartialEq, Eq)]
+struct AppLogger(Logger); // public binding ≠ private raw type
+
+fn new_logger() -> Logger { Logger { name: "default" } }
+fn named(log: Logger) -> Logger { /* ... */ log }
+fn new_app_logger(log: Logger) -> AppLogger { AppLogger(named(log)) }
+
+fn logging() -> Module {
+    Module::new("logging")
+        .provide_private(new_logger)
+        .provide(new_app_logger)
+        .invoke(|log: AppLogger| { /* ... */ })
+}
+
+Modrun::builder().module(logging());
+```
+
+At the composition root, one composed constructor is enough:
+`provide(|| named(new_logger()))` or a named `fn app_logger() -> Logger { ... }`.
+See [`examples/wrap.rs`](examples/wrap.rs).
+
+### Provide
+
 **`provide`** registers a constructor. Nothing is built until something asks for it,
 and each type is built at most once. Constructors that return `Result<T, E>` must
 use `provide_result` (or `provide_result_async`); handing one to plain `provide`
@@ -85,6 +153,8 @@ DAG layer: **async** constructors in the same layer are polled concurrently on o
 task; **sync** constructors run inside `construct()` and defer creation of later
 futures in that layer. Shared dependencies still run first, then dependents
 continue in dependency order.
+
+### Supply
 
 **`supply`** hands the container a value you already have, skipping the constructor.
 
@@ -258,8 +328,7 @@ of `Group<T>` shadows the aggregated group inside that module — use
 to contribute members instead. For two groups of the same element type, use
 newtypes (same as duplicate singletons).
 
-**Method matrix** (all have `_mut` on [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)
-and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) where applicable):
+**Method matrix** (group members mirror the four `provide_*` variants above):
 
 | Register | Use when |
 |----------|----------|
@@ -268,9 +337,11 @@ and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) where ap
 | `provide_group_async` | async infallible |
 | `provide_group_result_async` | async fallible |
 | `supply_group` | pre-built member value |
-| `provide_group_dyn` | erased ctor from `into_provider()` |
 | `init_group` / `require_group` | composition root only; empty vs non-empty policy |
-| `init_group_mut` / `require_group_mut` | same, for `&mut self` builders |
+
+`provide_group_dyn` is for wrapper libraries (same rule as `provide_dyn`). All methods
+also have `_mut` variants on [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)
+and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html).
 
 ## Dependency graph
 
@@ -519,6 +590,7 @@ cargo run --example basic    # domain modules, private deps, an async constructo
 cargo run --example handlers # multiple modules contribute to a Group
 cargo run --example worker   # newtype pools + task that selects on Stopped
 cargo run --example swap     # supply a fake at the composition root (tests)
+cargo run --example wrap     # wrapper constructors for cross-cutting concerns
 cargo run --example axum     # HTTP server: task_with binds in OnStart, then serve
 ```
 

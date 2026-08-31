@@ -1,11 +1,12 @@
 # modrun Roadmap
 
-本路线图聚焦三项最高优先级能力：**Decorate**、**Value Groups**、**Dependency Graph**。
-它们与现有的 `Module`、`provide_private`、DAG 并发构建、`tracing` 事件体系协同，
-目标是把 modrun 从「DI 工具」推进为 **Tokio 原生的模块化应用运行时**。
+modrun 是 **Tokio 上的模块化应用组合器**：领域 `Module`、构造函数注入、显式模块边界、
+统一生命周期——在组合根一次性接线。核心路线图（Value Groups、Dependency Graph）已交付；
+当前重心是 **文档收敛、稳定性、示例**，而不是继续堆 registration API。
 
-> 刻意不做：string qualifier、runtime `get<T>()`、`fx.Annotate` 式反射 API。
-> 详见 README「When not to use this」。
+> 刻意不做：string qualifier、runtime `get<T>()`、`fx.Annotate` / `fx.Populate`、
+> 注解扫描、service locator、全局 singleton、`decorate` 一等 API（用 wrapper 构造函数代替）。
+> 详见 README「When not to use this」与 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ***
 
@@ -13,100 +14,71 @@
 
 | 能力 | 现状 |
 |------|------|
-| DI / Module / Lifecycle | ✅ 完整 |
+| Module / Lifecycle / typed wiring | ✅ 完整 |
 | DAG 并发构造 | ✅ `container/graph.rs` + `build.rs` |
-| 可观测性（底层） | ✅ `trace.rs`，Fx 风格 console + structured fields |
-| Decorate | ⚠️ 可用 `provide_private` + `provide` 模拟，无一等 API |
-| Value Groups | ✅ `Group<T>` + `provide_group*` / `supply_group` / `require_group` |
+| 可观测性 | ✅ `trace.rs`，Fx 风格 console + structured fields |
+| Value Groups | ✅ v0.2 — `Group<T>` + `provide_group*` / `supply_group` / `require_group` |
 | Graph 导出 | ✅ `render_dot()` + `.dot_graph(path)` |
+| 横切关注点 | ✅ **文档化** — wrapper 构造函数（`examples/wrap.rs`），无 `decorate` API |
+| API 收敛 | 🔄 README 五动词表、CONTRIBUTING 稳定性承诺 |
 
 ***
 
-## Phase 1 — Decorate
+## Phase 1 — 横切关注点（wrapper 构造函数，非 API）
 
-**目标**：对已有类型 `T` 注册变换函数，不新增 binding key，支持链式叠加。
+**状态：✅ 以文档与示例交付，不实现 `decorate`。**
 
-### 动机
+### 结论
 
-横切关注点（metrics、tracing、命名 logger、timeout wrapper）不应通过「再 provide 一个同类型」解决——
-modrun 的类型键模型会直接报 `type already provided`。
-
-当前 workaround（`provide_private` + `provide`）可用但笨重，且无法表达 decorator 链。
-
-### 目标 API
+Fx 的 `Decorate` 在 Rust 里应表达为 **普通 wrapper 构造函数**。每种类型只能 `provide` 一次：
 
 ```rust
+// 组合根：一个 ctor 内组合
+fn app_logger() -> Logger {
+    metrics_logger(named_logger(new_logger()))
+}
+Modrun::builder().provide(app_logger).invoke(boot);
+
+// 模块：私有原始类型 + 公开 newtype / 服务类型
+Module::new("http")
+    .provide_private(new_client)
+    .provide(with_timeout)   // fn(Client) -> HttpClient
+    .invoke(register_routes)
+```
+
+### 为何不做 `decorate` API
+
+1. 会再复制一整族 sync/async/fallible × module × `_mut` 方法，扩大 Fx 式表面积。
+2. wrapper ctor 已是强类型、可测试、IDE 可跳转的 Rust 惯用法。
+3. `provide_private` + `provide` 已覆盖模块边界场景。
+
+### 交付物
+
+* \[x] README / README\_zh「横切关注点」节
+* \[x] `examples/wrap.rs`
+* \[x] CONTRIBUTING「Deliberately rejected」
+
+### 历史设计（仅供参考，不再实施）
+
+<details>
+<summary>原 Phase 1 Decorate API 草案（已否决）</summary>
+
+```rust
+// 不再计划实现
 Modrun::builder()
     .provide(new_logger)
     .decorate(|log: Logger| log.with_name("myapp"))
     .decorate(with_metrics)
     .invoke(boot);
-
-Module::new("http")
-    .provide(new_client)
-    .decorate(with_timeout)
-    .invoke(boot);
 ```
 
-与 `provide` 对称，支持 sync / async / fallible 变体（`decorate_async`、`decorate_result` 等）。
-
-### 语义设计
-
-1. **作用对象**：decorate 只变换「该 scope 内最终对外可见的 `T` binding」。
-   * 若存在 `provide_private` 原始构造 + `provide` 公开包装，decorate 加在**最外层**（等价于 Fx 对 result 做 decorate）。
-2. **顺序**：同一类型的多个 decorator 按注册顺序组成链：`d2(d1(ctor()))`。
-3. **依赖注入**：decorator 函数签名为 `fn(T) -> T`（或 `fn(T, Dep...) -> T`），
-   `T` 由被装饰的 binding 注入；额外依赖走现有 `DepList` 机制。
-4. **与 supply 的交互**：若类型已被 `supply`，decorate 仍然生效（对 supplied value 做变换）。
-5. **与 invoke 无关**：decorator 不参与 invoke 根节点推导；只有被 decorate 的类型被依赖时才运行。
-
-### 实现要点
-
-| 模块 | 改动 |
-|------|------|
-| `container/types.rs` | 新增 `DecoratorKey` / `DecoratorChain`，挂在 `ProviderKey` 上 |
-| `container/storage.rs` | `insert_decorator`；校验类型已注册或将在同 option batch 中注册 |
-| `container/graph.rs` | `resolve_provider` 返回时附带 decorator 链；构建完成后执行 decorate |
-| `provide.rs` | 新增 `DecorateOption`、`DecoratorFn` trait（镜像 `ProviderFn`） |
-| `wiring.rs` | `.decorate()` / `.decorate_mut()` 及 async/fallible 变体 |
-| `trace.rs` | 新增 `DECORATE` 事件（`type_name`、`decorator`、`module`、`elapsed_ms`） |
-
-构建流程调整：
-
-```text
-resolve deps → run ctor (or take supplied value) → run decorator chain → cache singleton
-```
-
-Decorator 在 ctor 之后、写入 cache 之前执行，保证后续依赖看到的是 decorated 实例。
-
-### 测试
-
-* \[ ] 单 decorator：变换生效，依赖方拿到新值
-* \[ ] 链式 decorator：顺序正确
-* \[ ] Module + `provide_private`：decorate 加在 public binding 外
-* \[ ] `supply` + decorate
-* \[ ] async decorator
-* \[ ] fallible decorator 错误传播
-* \[ ] 对未注册类型 decorate → 编译期或 build-time 错误
-* \[ ] DAG：decorator 依赖其他类型时 layer 排序正确
-
-### 文档 & 示例
-
-* \[ ] README「Concepts」新增 **Decorate** 节
-* \[ ] `examples/decorate.rs`：logger / client wrapper
-
-### 里程碑
-
-| 版本 | 内容 |
-|------|------|
-| v0.x | sync `decorate`，builder + module，trace 事件 |
-| v0.x+1 | async / fallible 变体 |
+</details>
 
 ***
 
-## Phase 2 — Value Groups
+## Phase 2 — Value Groups（已完成）
 
-**目标**：多个模块向同一「组」贡献实例，注入方一次性拿到集合。
+**状态：✅ v0.2 已交付。** 以下保留为设计参考。
 
 ### 动机
 
@@ -500,9 +472,9 @@ fn boot(handlers: Group<Arc<dyn EventHandler>>) {
 
 ***
 
-## Phase 3 — Dependency Graph
+## Phase 3 — Dependency Graph（已完成）
 
-**目标**：把现有内部依赖图导出为可诊断、可分享的可视化输出。
+**状态：✅ 已交付 `render_dot()` + `.dot_graph(path)`。** 以下保留为设计参考。
 
 ### 动机
 
@@ -607,17 +579,17 @@ digraph {
 
 ***
 
-## 推荐实施顺序
+## 当前优先级
 
 ```text
-Phase 1 Decorate
-    ↓  （横切能力，独立可用）
-Phase 3 Graph DOT   ← 可与 Phase 2 并行；成本低，且立刻提升 debug 体验
-    ↓
-Phase 2 Groups      ← 依赖 decorate 的 group 变体可后续追加
+✅ Phase 2 Groups
+✅ Phase 3 Graph DOT
+✅ Phase 1 横切 — wrapper ctor 文档化（无 decorate API）
+🔄 稳定性与文档收敛（CONTRIBUTING、五动词表、示例）
+⏭ 可选：startup profile、test helpers、render_tree()
 ```
 
-Phase 3 不依赖 Phase 1/2 即可交付首版；但完整图语义需随 Phase 1/2 迭代。
+不再计划：`decorate`、`replace`、`populate`、named deps、runtime `get<T>()`。
 
 ***
 
@@ -625,25 +597,27 @@ Phase 3 不依赖 Phase 1/2 即可交付首版；但完整图语义需随 Phase 
 
 | 优先级 | 能力 | 说明 |
 |--------|------|------|
-| A | `replace` | 覆盖已注册 provider；`supply` 已覆盖 composition root 场景 |
 | A | Test helpers | `TestApp`、`assert_started`；`start()`/`stop()` 已可用 |
 | A | Startup profile | 汇总 `elapsed_ms` 为启动报告表 |
-| B | `populate` | Rust 中 `invoke` 更自然，暂不计划 |
-| B | Soft group 策略 | 纳入 Phase 2 默认行为 |
-| — | Named deps | 不做，用 newtype |
-| — | `get<T>()` | 不做，保持无 service locator |
+| B | `render_tree()` | 终端友好依赖树（DOT 已有） |
+| B | `populate` | Rust 中 `invoke` 更自然，**不做** |
+| — | `replace` | 组合根 `supply` 已够用，**不做** |
+| — | `decorate` | wrapper ctor 已够用，**不做** |
+| — | Named deps | **不做**，用 newtype |
+| — | `get<T>()` | **不做**，保持无 service locator |
+| — | 模块间 event bus | **不在范围**，非 modrun 职责 |
 
 ***
 
-## 成功标准
+## 成功标准（已达成）
 
-完成三项后，一个典型应用可以写成：
+典型应用形态：
 
 ```rust
 fn http_module() -> Module {
     Module::new("http")
-        .provide(new_client)
-        .decorate(with_metrics)
+        .provide_private(new_client)
+        .provide(with_metrics)          // fn(Client) -> HttpClient (newtype)
         .provide_group(logging_mw)
         .provide_group(auth_mw)
         .invoke(register_routes)
@@ -666,9 +640,11 @@ fn boot(
     middleware: Group<Middleware>,
     server: HttpServer,
 ) -> Result<()> {
-    server.register(handlers.0, middleware.0);
+    for h in handlers {
+        server.register(h);
+    }
     lc.append(server)
 }
 ```
 
-这标志着 modrun 具备 **模块化 + 插件化 + 可观测图** 的完整组合能力。
+modrun 已具备 **模块化组合 + 值组插件化 + 可观测图**；下一步是收敛认知负担，而不是对齐 Fx 的 API 数量。

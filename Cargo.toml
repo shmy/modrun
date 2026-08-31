@@ -6,14 +6,14 @@ edition = "2024"
 # `cargo test` (not `--all-targets`) so examples/benches may depend on crates
 # with a higher MSRV (e.g. axum).
 rust-version = "1.85"
-description = "Lightweight app wiring: provide/invoke/lifecycle for Tokio services"
+description = "Modular application composer for Tokio: domain modules, typed wiring, lifecycle"
 license = "MIT"
 readme = "README.md"
 authors = ["shmy <chao.w1226@gmail.com>"]
 repository = "https://github.com/shmy/modrun"
 homepage = "https://github.com/shmy/modrun"
 documentation = "https://docs.rs/modrun"
-keywords = ["dependency-injection", "lifecycle", "tokio", "async", "wiring"]
+keywords = ["modular", "lifecycle", "tokio", "async", "wiring", "composition-root"]
 categories = ["asynchronous", "development-tools", "rust-patterns"]
 exclude = [".github", "justfile"]
 
@@ -99,4 +99,9 @@ required-features = ["logging"]
 [[example]]
 name = "swap"
 path = "examples/swap.rs"
+required-features = ["logging"]
+
+[[example]]
+name = "wrap"
+path = "examples/wrap.rs"
 required-features = ["logging"]

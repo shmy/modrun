@@ -478,7 +478,7 @@ Framework events (provide / supply / invoke / construct / OnStart / OnStop) are
 emitted through [`tracing`](https://docs.rs/tracing) with target `modrun`, using
 [uber/fx](https://github.com/uber-go/fx)-style console lines such as
 `[modrun] PROVIDE    my::Type <= my::new`. The same events carry structured
-fields (`constructor`, `module`, `elapsed_ms`, `error`, …) so a JSON subscriber
+fields (`constructor`, `module`, `elapsed`, `error`, …) so a JSON subscriber
 can filter them in production.
 
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)

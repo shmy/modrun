@@ -482,7 +482,7 @@ modrun 已在 build 前做 cycle / missing provider 检测，但错误信息是�
 开发者和用户需要：
 
 * 一眼看清模块边界与依赖方向
-* 排查「为什么构造这么慢」（配合已有 `elapsed_ms` trace）
+* 排查「为什么构造这么慢」（配合已有 `elapsed` trace）
 * CI 中生成图作为文档
 
 ### 目标 API
@@ -598,7 +598,7 @@ digraph {
 | 优先级 | 能力 | 说明 |
 |--------|------|------|
 | A | Test helpers | `TestApp`、`assert_started`；`start()`/`stop()` 已可用 |
-| A | Startup profile | 汇总 `elapsed_ms` 为启动报告表 |
+| A | Startup profile | 汇总 `elapsed` 为启动报告表 |
 | B | `render_tree()` | 终端友好依赖树（DOT 已有） |
 | B | `populate` | Rust 中 `invoke` 更自然，**不做** |
 | — | `replace` | 组合根 `supply` 已够用，**不做** |

@@ -47,8 +47,8 @@ fn user_deps(deps: &[(TypeId, &'static str)]) -> String {
         .join(", ")
 }
 
-fn elapsed_ms(runtime: Duration) -> u64 {
-    runtime.as_millis().min(u128::from(u64::MAX)) as u64
+fn format_elapsed(runtime: Duration) -> String {
+    format!("{runtime:?}")
 }
 
 fn hook_label(name: &'static str, hook: usize) -> String {
@@ -235,7 +235,7 @@ pub(crate) fn run_ok(name: &str, scope_name: &'static str, runtime: Duration) {
         target: TARGET,
         constructor = name,
         module = scope_name,
-        elapsed_ms = elapsed_ms(runtime),
+        elapsed = format_elapsed(runtime),
         "{PREFIX} RUN\t\tprovide: {name} in {runtime:?}{suffix}"
     );
 }
@@ -302,7 +302,7 @@ pub(crate) fn on_start_executed(hook: usize, name: &'static str, runtime: Durati
         target: TARGET,
         hook,
         hook_name = label.as_str(),
-        elapsed_ms = elapsed_ms(runtime),
+        elapsed = format_elapsed(runtime),
         "{PREFIX} HOOK OnStart\t\t{label} ran successfully in {runtime:?}"
     );
 }
@@ -369,7 +369,7 @@ pub(crate) fn on_stop_executed(hook: usize, name: &'static str, runtime: Duratio
         target: TARGET,
         hook,
         hook_name = label.as_str(),
-        elapsed_ms = elapsed_ms(runtime),
+        elapsed = format_elapsed(runtime),
         "{PREFIX} HOOK OnStop\t\t{label} ran successfully in {runtime:?}"
     );
 }
@@ -527,5 +527,18 @@ mod tests {
     fn module_suffix_omits_root() {
         assert_eq!(module_suffix("<root>"), "");
         assert_eq!(module_suffix("user"), " from module \"user\"");
+    }
+
+    #[test]
+    fn format_elapsed_matches_duration_debug() {
+        for runtime in [
+            Duration::ZERO,
+            Duration::from_nanos(806417),
+            Duration::from_nanos(2_174_542),
+            Duration::from_nanos(259_309_083),
+            Duration::from_secs(2),
+        ] {
+            assert_eq!(format_elapsed(runtime), format!("{runtime:?}"));
+        }
     }
 }

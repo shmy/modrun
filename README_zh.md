@@ -376,7 +376,7 @@ let dot = Modrun::builder()
 ## 日志
 
 框架事件（provide / supply / invoke / construct / OnStart / OnStop）通过 [`tracing`](https://docs.rs/tracing) 发出，target 为 `modrun`，控制台行是 [uber/fx](https://github.com/uber-go/fx) 风格，例如
-`[modrun] PROVIDE    my::Type <= my::new`。同一批事件还带结构化字段（`constructor`、`module`、`elapsed_ms`、`error` 等），生产环境的 JSON subscriber 可以按字段过滤。
+`[modrun] PROVIDE    my::Type <= my::new`。同一批事件还带结构化字段（`constructor`、`module`、`elapsed`、`error` 等），生产环境的 JSON subscriber 可以按字段过滤。
 
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
 给示例和本地二进制用（默认 feature `logging`）。日志打到 stderr，仅在 stderr 是 TTY 时开 ANSI；如果已经安装了 subscriber，它是 **no-op**，不会 panic。生产服务应自己装 subscriber，跳过这个助手。没有 subscriber 时，这些事件是廉价空操作：

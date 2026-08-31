@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* **Breaking:** structured trace field `elapsed_ms` (integer milliseconds, sub-ms values truncated to `0`) is replaced by `elapsed` (human-readable string matching `{runtime:?}`, e.g. `"806.417µs"`, `"2.174542ms"`). Affects `RUN`, `HOOK OnStart`, and `HOOK OnStop` success events.
 * Group aggregation collects members without cloning the member key list.
 * Constructor trace path checks `tracing` INFO once per provider when logging is off.
 * Graph validation caches dependency resolution during `validate` / `freeze_layers`, and skips the DFS cycle pass on the success path (runs only when layer sorting detects a cycle, for a readable path).

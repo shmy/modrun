@@ -150,7 +150,7 @@
 //! Framework events (provide / supply / invoke / construct / lifecycle) are
 //! emitted through [`tracing`] with target `modrun`, using [uber/fx](https://github.com/uber-go/fx)-style
 //! console lines such as `[modrun] PROVIDE ...`. Events also carry structured
-//! fields (`constructor`, `module`, `elapsed_ms`, …) for JSON subscribers.
+//! fields (`constructor`, `module`, `elapsed`, …) for JSON subscribers.
 //! Call `modrun::logging::init()` from examples and local binaries
 //! (requires the `logging` feature); it is a no-op if a subscriber is already
 //! installed, writes to stderr, and enables ANSI only when stderr is a terminal. Production

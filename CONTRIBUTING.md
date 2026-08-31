@@ -55,8 +55,8 @@ Available in `modrun::__wiring`:
 * `InvokeFn`, `AsyncInvokeFn`
 * `DynProvider`, `DynInvoker`
 
-Builder: `provide_dyn`, `invoke_dyn`, `provide_group_dyn` (+ `_mut` / `_private` variants),
-all `#[doc(hidden)]`.
+Builder: `provide_dyn`, `invoke_dyn`, `provide_group_dyn` (+ `_private` variants on `Module`),
+all `#[doc(hidden)]`. There are no `*_mut` builder methods — chain on `self` instead.
 
 ## Deliberately rejected
 

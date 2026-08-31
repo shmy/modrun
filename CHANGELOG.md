@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html): multiple modules contribute values of the same type; inject `Group<T>` or `Arc<Group<T>>`. Register members with `provide_group` / `provide_group_result` / `provide_group_async` / `provide_group_result_async`, `supply_group`, or `provide_group_dyn` (and `_mut` variants). Empty groups need [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group) or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group) (`require_group` also rejects emptiness at build time). Members require `T: Clone`. `handlers` example.
+* [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html): multiple modules contribute values of the same type; inject `Group<T>` or `Arc<Group<T>>`. Register members with `provide_group` / `provide_group_result` / `provide_group_async` / `provide_group_result_async`, `supply_group`, or hidden `provide_group_dyn`. Empty groups need [`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group) or [`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group) (`require_group` also rejects emptiness at build time). Members require `T: Clone`. `handlers` example.
 * [`ModrunBuilder::render_dot`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.render_dot) and [`.dot_graph(path)`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.dot_graph): export the dependency graph as Graphviz DOT after validation, without running constructors or invokers.
 * [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) / [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html) for long-running OnStart work. OnStop signals the task and joins; drop aborts leftover work.
 * [`task_with`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) / [`PreparedTask`](https://docs.rs/modrun/latest/modrun/struct.PreparedTask.html): await setup (bind/listen) during OnStart so those failures fail start, then spawn the rest.
@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* **Breaking:** removed all public `*_mut` builder methods (`provide_mut`, `module_mut`, `build_timeout_mut`, …). Chain on consuming `self` instead.
+* Positioning and docs: modular application **composer** (not generic DI); API matrix and three common patterns (domain module / group / wrapper) in README.
+* Type-erased wiring moved to hidden [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html); `provide_dyn` / `invoke_dyn` / `provide_group_dyn` are `#[doc(hidden)]`.
 * MSRV lowered from 1.88 to **1.85** (edition 2024 floor; let-chains are unused). CI checks the library with `cargo test` (not `--all-targets`) so examples/benches are not bound to that MSRV.
 * [`logging::init`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html) is a no-op when a tracing subscriber is already installed (it no longer panics). The helper writes to stderr; ANSI follows stderr (TTY only).
 * Default startup banner is printed to stderr, and only when stderr is a TTY. [`.banner(text)`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.banner) still prints custom text to stderr even when not a TTY.

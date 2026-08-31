@@ -408,7 +408,7 @@ async fn cycle_through_arc_dependency_is_reported_during_validation() {
 }
 
 #[tokio::test]
-async fn provide_mut_and_invoke_async() {
+async fn invoke_async_with_arc_dependency() {
     struct N(u8);
 
     fn new_n() -> N {
@@ -419,10 +419,15 @@ async fn provide_mut_and_invoke_async() {
         assert_eq!(n.0, 3);
     }
 
-    let mut b = Modrun::builder();
-    b.provide_mut(new_n);
-    b.invoke_async_mut(check);
-    b.start().await.unwrap().stop().await.unwrap();
+    Modrun::builder()
+        .provide(new_n)
+        .invoke_async(check)
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

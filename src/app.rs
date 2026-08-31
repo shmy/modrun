@@ -91,12 +91,6 @@ impl ModrunBuilder {
     /// Install a domain [`Module`].
     #[must_use]
     pub fn module(mut self, module: Module) -> Self {
-        self.module_mut(module);
-        self
-    }
-
-    /// [`module`](Self::module) for `&mut self`.
-    pub fn module_mut(&mut self, module: Module) -> &mut Self {
         self.push_option(module.into_option());
         self
     }
@@ -122,12 +116,6 @@ impl ModrunBuilder {
     /// disables the budget.
     #[must_use]
     pub fn build_timeout(mut self, duration: Duration) -> Self {
-        self.build_timeout_mut(duration);
-        self
-    }
-
-    /// [`build_timeout`](Self::build_timeout) for `&mut self`.
-    pub fn build_timeout_mut(&mut self, duration: Duration) -> &mut Self {
         self.build_timeout = Some(duration);
         self
     }
@@ -135,12 +123,6 @@ impl ModrunBuilder {
     /// Do not bound graph construction.
     #[must_use]
     pub fn no_build_timeout(mut self) -> Self {
-        self.no_build_timeout_mut();
-        self
-    }
-
-    /// [`no_build_timeout`](Self::no_build_timeout) for `&mut self`.
-    pub fn no_build_timeout_mut(&mut self) -> &mut Self {
         self.build_timeout = None;
         self
     }
@@ -156,12 +138,6 @@ impl ModrunBuilder {
     /// disables the budget.
     #[must_use]
     pub fn start_timeout(mut self, duration: Duration) -> Self {
-        self.start_timeout_mut(duration);
-        self
-    }
-
-    /// [`start_timeout`](Self::start_timeout) for `&mut self`.
-    pub fn start_timeout_mut(&mut self, duration: Duration) -> &mut Self {
         self.start_timeout = Some(duration);
         self
     }
@@ -170,12 +146,6 @@ impl ModrunBuilder {
     /// [`stop_timeout`](Self::stop_timeout).
     #[must_use]
     pub fn no_start_timeout(mut self) -> Self {
-        self.no_start_timeout_mut();
-        self
-    }
-
-    /// [`no_start_timeout`](Self::no_start_timeout) for `&mut self`.
-    pub fn no_start_timeout_mut(&mut self) -> &mut Self {
         self.start_timeout = None;
         self
     }
@@ -192,12 +162,6 @@ impl ModrunBuilder {
     /// disables the budget.
     #[must_use]
     pub fn stop_timeout(mut self, duration: Duration) -> Self {
-        self.stop_timeout_mut(duration);
-        self
-    }
-
-    /// [`stop_timeout`](Self::stop_timeout) for `&mut self`.
-    pub fn stop_timeout_mut(&mut self, duration: Duration) -> &mut Self {
         self.stop_timeout = Some(duration);
         self
     }
@@ -205,12 +169,6 @@ impl ModrunBuilder {
     /// Do not bound OnStop / unwind.
     #[must_use]
     pub fn no_stop_timeout(mut self) -> Self {
-        self.no_stop_timeout_mut();
-        self
-    }
-
-    /// [`no_stop_timeout`](Self::no_stop_timeout) for `&mut self`.
-    pub fn no_stop_timeout_mut(&mut self) -> &mut Self {
         self.stop_timeout = None;
         self
     }
@@ -223,12 +181,6 @@ impl ModrunBuilder {
     /// default banner, custom text is printed even when stderr is not a TTY.
     #[must_use]
     pub fn banner(mut self, text: impl Into<std::borrow::Cow<'static, str>>) -> Self {
-        self.banner_mut(text);
-        self
-    }
-
-    /// [`banner`](Self::banner) for `&mut self`.
-    pub fn banner_mut(&mut self, text: impl Into<std::borrow::Cow<'static, str>>) -> &mut Self {
         self.banner = crate::banner::Banner::Custom(text.into());
         self
     }
@@ -239,12 +191,6 @@ impl ModrunBuilder {
     /// from tests that run in a terminal, or when the ASCII art is never wanted.
     #[must_use]
     pub fn no_banner(mut self) -> Self {
-        self.no_banner_mut();
-        self
-    }
-
-    /// [`no_banner`](Self::no_banner) for `&mut self`.
-    pub fn no_banner_mut(&mut self) -> &mut Self {
         self.banner = crate::banner::Banner::Off;
         self
     }
@@ -271,12 +217,6 @@ impl ModrunBuilder {
     /// actually start.
     #[must_use]
     pub fn dot_graph(mut self, path: impl Into<PathBuf>) -> Self {
-        self.dot_graph_mut(path);
-        self
-    }
-
-    /// [`dot_graph`](Self::dot_graph) for `&mut self`.
-    pub fn dot_graph_mut(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.dot_graph_path = Some(path.into());
         self
     }
@@ -639,12 +579,6 @@ impl ModrunBuilder {
     /// when no module contributes a member.
     #[must_use]
     pub fn init_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
-        self.init_group_mut::<T>();
-        self
-    }
-
-    /// [`init_group`](Self::init_group) for `&mut self`.
-    pub fn init_group_mut<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
         self.push_option(crate::provide_group::init_group::<T>());
         self
     }
@@ -656,12 +590,6 @@ impl ModrunBuilder {
     /// should call this; modules cannot declare group policy.
     #[must_use]
     pub fn require_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
-        self.require_group_mut::<T>();
-        self
-    }
-
-    /// [`require_group`](Self::require_group) for `&mut self`.
-    pub fn require_group_mut<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
         self.push_option(crate::provide_group::require_group::<T>());
         self
     }

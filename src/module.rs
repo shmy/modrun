@@ -68,12 +68,6 @@ impl Module {
     /// Nest another domain module.
     #[must_use]
     pub fn module(mut self, child: Module) -> Self {
-        self.module_mut(child);
-        self
-    }
-
-    /// [`module`](Self::module) for `&mut self`.
-    pub fn module_mut(&mut self, child: Module) -> &mut Self {
         self.push_option(child.into_option());
         self
     }

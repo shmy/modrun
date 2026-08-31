@@ -69,7 +69,7 @@ async fn main() -> modrun::Result<()> {
 
 ### 五个接线动词
 
-大多数应用只需要五个注册概念。其余变体只是 sync/async、可失败/不可失败，或 `_mut`（`&mut self` 构建器）的区别。
+大多数应用只需要五个注册概念。按函数签名（sync / async / 可失败）选方法——见下方 [API 矩阵](#api-矩阵)。
 
 | 动词 | 作用 |
 |------|------|
@@ -78,6 +78,61 @@ async fn main() -> modrun::Result<()> {
 | [`invoke`](#invoke) | 拉取依赖图；invoker 参数决定哪些类型会被构造 |
 | [`module`](#模块) | 把领域装配收在命名模块与私有作用域下 |
 | [`provide_group`](#值组groups) | 向 [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html) 贡献一个成员 |
+
+### API 矩阵
+
+应用代码如何选注册方法（不含 `*_dyn`）：
+
+| | Sync | `Result` | Async | Async `Result` |
+|---|------|----------|-------|----------------|
+| **单例** [`provide`](#provide) | `provide` | `provide_result` | `provide_async` | `provide_result_async` |
+| **单例，模块私有** | `provide_private` | `provide_result_private` | `provide_async_private` | `provide_result_async_private` |
+| **组成员** [`provide_group`](#值组groups) | `provide_group` | `provide_group_result` | `provide_group_async` | `provide_group_result_async` |
+| **预构建值** | `supply` / `supply_private` | — | — | — |
+| **图根** [`invoke`](#invoke) | `invoke` *(也可返回 `Result`)* | *(同上)* | `invoke_async` | *(同上)* |
+
+[`invoke`](#invoke) **没有** `_result` 后缀：可失败 invoker 直接从 `invoke` / `invoke_async` 返回 `Result<(), E>`。只有构造函数在编译期区分 `provide` 与 `provide_result`。
+
+仅 [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)：
+[`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group)、
+[`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group)、
+[`supply_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.supply_group)。
+
+### 三种常见模式
+
+大多数应用是下面三种之一（均有示例）：
+
+| 模式 | 场景 | 示例 |
+|------|------|------|
+| **领域模块** | 隐藏内部类型，只暴露服务 | [`basic`](examples/basic.rs) — `provide_private` + 公开 `provide` + `invoke` |
+| **值组 Group** | 多模块贡献同类型元素 | [`handlers`](examples/handlers.rs) — `provide_group` → 根上注入 `Group<T>` |
+| **Wrapper** | 指标、命名、超时（无 `decorate` API） | [`wrap`](examples/wrap.rs) — 单 ctor 组合，或 `provide_private` + newtype |
+
+**领域模块**：
+
+```text
+fn user_domain() -> Module {
+    Module::new("user")
+        .provide_private(new_user_repo)
+        .provide(new_user_service)
+        .invoke(register_user_hooks)
+}
+
+Modrun::builder().module(user_domain()).invoke(boot).run().await
+```
+
+**Group** — 插件、路由、handler：
+
+```text
+Modrun::builder()
+    .module(Module::new("user").provide_group(user_routes))
+    .module(Module::new("order").provide_group(order_routes))
+    .invoke(|routes: Group<Route>| mount(routes))
+```
+
+**Wrapper** — 见 [横切关注点](#横切关注点wrapper-构造函数) 与 [`wrap.rs`](examples/wrap.rs)。
+
+可替换依赖与测试替身放在 **组合根** 的 [`supply`](#supply)，不要放进模块——见 [`swap`](examples/swap.rs)。
 
 ### Provide 变体
 
@@ -129,6 +184,8 @@ Modrun::builder().module(logging());
 ### Supply
 
 **`supply`** 把已经有的值交给容器，跳过构造函数。
+
+### Invoke
 
 **`invoke`** 拉取依赖图。invoker 的参数是构建的根：没有人直接或间接 invoke 的类型永远不会被构造。
 只 `provide`、没有被 invoke 到的迁移任务或后台消费者会一直不跑，直到有东西 `invoke` 它（或依赖它的类型）。Invoker 在 build 期间只跑一次，通常也是注册生命周期 hook 的地方。
@@ -262,9 +319,6 @@ trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
 | `provide_group_result_async` | 异步、`Result` |
 | `supply_group` | 已有实例 |
 | `init_group` / `require_group` | 仅组合根；空组 / 非空策略 |
-
-`provide_group_dyn` 仅供 wrapper 库通过 [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html) 使用（规则同 `provide_dyn`，均为 `#[doc(hidden)]`）。所有方法在 [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
-[`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上也有 `_mut` 变体。
 
 ## 依赖图
 

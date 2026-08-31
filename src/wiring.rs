@@ -1,6 +1,6 @@
 //! Fluent wiring methods shared by [`ModrunBuilder`](crate::ModrunBuilder) and [`Module`](crate::Module).
 
-/// Implements `.provide` / `.supply` / `.invoke` (and private / `_mut` variants).
+/// Implements `.provide` / `.supply` / `.invoke` (and private variants on [`Module`](crate::Module)).
 ///
 /// The type must provide `fn push_option(&mut self, Box<dyn ModOption>)`.
 macro_rules! impl_wiring_methods {
@@ -29,15 +29,6 @@ macro_rules! impl_wiring_methods {
             where
                 F: $crate::provide::ProviderFn<M> + 'static,
             {
-                self.provide_mut(ctor);
-                self
-            }
-
-            /// [`provide`](Self::provide) for `&mut self`.
-            pub fn provide_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                F: $crate::provide::ProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide::provide(ctor));
                 self
             }
@@ -45,15 +36,6 @@ macro_rules! impl_wiring_methods {
             /// Register a fallible constructor (`Result<T, E>`).
             #[must_use]
             pub fn provide_result<M, F>(mut self, ctor: F) -> Self
-            where
-                F: $crate::provide::FallibleProviderFn<M> + 'static,
-            {
-                self.provide_result_mut(ctor);
-                self
-            }
-
-            /// [`provide_result`](Self::provide_result) for `&mut self`.
-            pub fn provide_result_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 F: $crate::provide::FallibleProviderFn<M> + 'static,
             {
@@ -67,15 +49,6 @@ macro_rules! impl_wiring_methods {
             where
                 F: $crate::provide::AsyncProviderFn<M> + 'static,
             {
-                self.provide_async_mut(ctor);
-                self
-            }
-
-            /// [`provide_async`](Self::provide_async) for `&mut self`.
-            pub fn provide_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                F: $crate::provide::AsyncProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide::provide_async(ctor));
                 self
             }
@@ -83,15 +56,6 @@ macro_rules! impl_wiring_methods {
             /// Register a fallible `async` constructor (`Result<T, E>`).
             #[must_use]
             pub fn provide_result_async<M, F>(mut self, ctor: F) -> Self
-            where
-                F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
-            {
-                self.provide_result_async_mut(ctor);
-                self
-            }
-
-            /// [`provide_result_async`](Self::provide_result_async) for `&mut self`.
-            pub fn provide_result_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
             {
@@ -104,13 +68,6 @@ macro_rules! impl_wiring_methods {
             #[doc(hidden)]
             #[must_use]
             pub fn provide_dyn(mut self, provider: $crate::__wiring::DynProvider) -> Self {
-                self.provide_dyn_mut(provider);
-                self
-            }
-
-            /// [`provide_dyn`](Self::provide_dyn) for `&mut self`.
-            #[doc(hidden)]
-            pub fn provide_dyn_mut(&mut self, provider: $crate::__wiring::DynProvider) -> &mut Self {
                 self.push_option($crate::provide::provide_dyn(provider));
                 self
             }
@@ -119,12 +76,6 @@ macro_rules! impl_wiring_methods {
             /// `Arc<T>` does not.
             #[must_use]
             pub fn supply<T: Send + Sync + 'static>(mut self, value: T) -> Self {
-                self.supply_mut(value);
-                self
-            }
-
-            /// [`supply`](Self::supply) for `&mut self`.
-            pub fn supply_mut<T: Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
                 self.push_option($crate::supply::supply(value));
                 self
             }
@@ -132,15 +83,6 @@ macro_rules! impl_wiring_methods {
             /// Register an invoker that pulls the dependency graph.
             #[must_use]
             pub fn invoke<M, F>(mut self, func: F) -> Self
-            where
-                F: $crate::invoke::InvokeFn<M> + 'static,
-            {
-                self.invoke_mut(func);
-                self
-            }
-
-            /// [`invoke`](Self::invoke) for `&mut self`.
-            pub fn invoke_mut<M, F>(&mut self, func: F) -> &mut Self
             where
                 F: $crate::invoke::InvokeFn<M> + 'static,
             {
@@ -154,15 +96,6 @@ macro_rules! impl_wiring_methods {
             where
                 F: $crate::invoke::AsyncInvokeFn<M> + 'static,
             {
-                self.invoke_async_mut(func);
-                self
-            }
-
-            /// [`invoke_async`](Self::invoke_async) for `&mut self`.
-            pub fn invoke_async_mut<M, F>(&mut self, func: F) -> &mut Self
-            where
-                F: $crate::invoke::AsyncInvokeFn<M> + 'static,
-            {
                 self.push_option($crate::invoke::invoke_async(func));
                 self
             }
@@ -172,13 +105,6 @@ macro_rules! impl_wiring_methods {
             #[doc(hidden)]
             #[must_use]
             pub fn invoke_dyn(mut self, invoker: $crate::__wiring::DynInvoker) -> Self {
-                self.invoke_dyn_mut(invoker);
-                self
-            }
-
-            /// [`invoke_dyn`](Self::invoke_dyn) for `&mut self`.
-            #[doc(hidden)]
-            pub fn invoke_dyn_mut(&mut self, invoker: $crate::__wiring::DynInvoker) -> &mut Self {
                 self.push_option($crate::invoke::invoke_dyn(invoker));
                 self
             }
@@ -199,15 +125,6 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::ProviderFn<M> + 'static,
             {
-                self.provide_private_mut(ctor);
-                self
-            }
-
-            /// [`provide_private`](Self::provide_private) for `&mut self`.
-            pub fn provide_private_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                F: $crate::provide::ProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide::provide_priv(ctor));
                 self
             }
@@ -215,15 +132,6 @@ macro_rules! impl_private_wiring_methods {
             /// Like [`provide_result`](Self::provide_result), scoped privately to the module.
             #[must_use]
             pub fn provide_result_private<M, F>(mut self, ctor: F) -> Self
-            where
-                F: $crate::provide::FallibleProviderFn<M> + 'static,
-            {
-                self.provide_result_private_mut(ctor);
-                self
-            }
-
-            /// [`provide_result_private`](Self::provide_result_private) for `&mut self`.
-            pub fn provide_result_private_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 F: $crate::provide::FallibleProviderFn<M> + 'static,
             {
@@ -237,15 +145,6 @@ macro_rules! impl_private_wiring_methods {
             where
                 F: $crate::provide::AsyncProviderFn<M> + 'static,
             {
-                self.provide_async_private_mut(ctor);
-                self
-            }
-
-            /// [`provide_async_private`](Self::provide_async_private) for `&mut self`.
-            pub fn provide_async_private_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                F: $crate::provide::AsyncProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide::provide_async_priv(ctor));
                 self
             }
@@ -253,15 +152,6 @@ macro_rules! impl_private_wiring_methods {
             /// Like [`provide_result_async`](Self::provide_result_async), scoped privately.
             #[must_use]
             pub fn provide_result_async_private<M, F>(mut self, ctor: F) -> Self
-            where
-                F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
-            {
-                self.provide_result_async_private_mut(ctor);
-                self
-            }
-
-            /// [`provide_result_async_private`](Self::provide_result_async_private) for `&mut self`.
-            pub fn provide_result_async_private_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
             {
@@ -273,13 +163,6 @@ macro_rules! impl_private_wiring_methods {
             #[doc(hidden)]
             #[must_use]
             pub fn provide_dyn_private(mut self, provider: $crate::__wiring::DynProvider) -> Self {
-                self.provide_dyn_private_mut(provider);
-                self
-            }
-
-            /// [`provide_dyn_private`](Self::provide_dyn_private) for `&mut self`.
-            #[doc(hidden)]
-            pub fn provide_dyn_private_mut(&mut self, provider: $crate::__wiring::DynProvider) -> &mut Self {
                 self.push_option($crate::provide::provide_dyn_priv(provider));
                 self
             }
@@ -287,12 +170,6 @@ macro_rules! impl_private_wiring_methods {
             /// Supply a value private to this module.
             #[must_use]
             pub fn supply_private<T: Send + Sync + 'static>(mut self, value: T) -> Self {
-                self.supply_private_mut(value);
-                self
-            }
-
-            /// [`supply_private`](Self::supply_private) for `&mut self`.
-            pub fn supply_private_mut<T: Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
                 self.push_option($crate::supply::supply_priv(value));
                 self
             }
@@ -318,17 +195,6 @@ macro_rules! impl_group_wiring_methods {
                 <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
                 F: $crate::provide::ProviderFn<M> + 'static,
             {
-                self.provide_group_mut(ctor);
-                self
-            }
-
-            /// [`provide_group`](Self::provide_group) for `&mut self`.
-            pub fn provide_group_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                M: $crate::provide::ProviderMarker,
-                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
-                F: $crate::provide::ProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide_group::provide_group::<M, F>(ctor));
                 self
             }
@@ -336,17 +202,6 @@ macro_rules! impl_group_wiring_methods {
             /// Register a fallible group member constructor (`Result<T, E>`).
             #[must_use]
             pub fn provide_group_result<M, F>(mut self, ctor: F) -> Self
-            where
-                M: $crate::provide::ProviderMarker,
-                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
-                F: $crate::provide::FallibleProviderFn<M> + 'static,
-            {
-                self.provide_group_result_mut(ctor);
-                self
-            }
-
-            /// [`provide_group_result`](Self::provide_group_result) for `&mut self`.
-            pub fn provide_group_result_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 M: $crate::provide::ProviderMarker,
                 <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
@@ -364,17 +219,6 @@ macro_rules! impl_group_wiring_methods {
                 <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
                 F: $crate::provide::AsyncProviderFn<M> + 'static,
             {
-                self.provide_group_async_mut(ctor);
-                self
-            }
-
-            /// [`provide_group_async`](Self::provide_group_async) for `&mut self`.
-            pub fn provide_group_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
-            where
-                M: $crate::provide::ProviderMarker,
-                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
-                F: $crate::provide::AsyncProviderFn<M> + 'static,
-            {
                 self.push_option($crate::provide_group::provide_group_async::<M, F>(ctor));
                 self
             }
@@ -382,17 +226,6 @@ macro_rules! impl_group_wiring_methods {
             /// Register a fallible async group member constructor (`Result<T, E>`).
             #[must_use]
             pub fn provide_group_result_async<M, F>(mut self, ctor: F) -> Self
-            where
-                M: $crate::provide::ProviderMarker,
-                <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
-                F: $crate::provide::FallibleAsyncProviderFn<M> + 'static,
-            {
-                self.provide_group_result_async_mut(ctor);
-                self
-            }
-
-            /// [`provide_group_result_async`](Self::provide_group_result_async) for `&mut self`.
-            pub fn provide_group_result_async_mut<M, F>(&mut self, ctor: F) -> &mut Self
             where
                 M: $crate::provide::ProviderMarker,
                 <M as $crate::provide::ProviderMarker>::Output: Clone + Send + Sync + 'static,
@@ -407,15 +240,6 @@ macro_rules! impl_group_wiring_methods {
             /// Supply a pre-built group member.
             #[must_use]
             pub fn supply_group<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
-                self.supply_group_mut(value);
-                self
-            }
-
-            /// [`supply_group`](Self::supply_group) for `&mut self`.
-            pub fn supply_group_mut<T: Clone + Send + Sync + 'static>(
-                &mut self,
-                value: T,
-            ) -> &mut Self {
                 self.push_option($crate::supply_group::supply_group(value));
                 self
             }
@@ -428,16 +252,6 @@ macro_rules! impl_group_wiring_methods {
                 mut self,
                 provider: $crate::__wiring::DynProvider,
             ) -> Self {
-                self.provide_group_dyn_mut::<T>(provider);
-                self
-            }
-
-            /// [`provide_group_dyn`](Self::provide_group_dyn) for `&mut self`.
-            #[doc(hidden)]
-            pub fn provide_group_dyn_mut<T: Clone + Send + Sync + 'static>(
-                &mut self,
-                provider: $crate::__wiring::DynProvider,
-            ) -> &mut Self {
                 self.push_option($crate::provide_group::provide_group_dyn::<T>(provider));
                 self
             }

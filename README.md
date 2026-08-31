@@ -81,8 +81,8 @@ Disable the default `signal` feature if you only use `start()` or wait on
 
 ### Five wiring verbs
 
-Most applications only need five registration concepts. Everything else is a variant
-(sync vs async, fallible vs infallible, or `_mut` for `&mut self` builders).
+Most applications only need five registration concepts. Pick the method that matches
+your function signature (sync / async / fallible) — see the [API matrix](#api-matrix) below.
 
 | Verb | Role |
 |------|------|
@@ -91,6 +91,64 @@ Most applications only need five registration concepts. Everything else is a var
 | [`invoke`](#invoke) | Pull the graph; invoker parameters are the roots of what gets built |
 | [`module`](#modules) | Group domain wiring under a name with a private scope |
 | [`provide_group`](#groups) | Contribute one member to a [`Group<T>`](https://docs.rs/modrun/latest/modrun/struct.Group.html) aggregate |
+
+### API matrix
+
+How to pick a registration method (application code only; no `*_dyn`):
+
+| | Sync | `Result` | Async | Async `Result` |
+|---|------|----------|-------|----------------|
+| **Singleton** [`provide`](#provide) | `provide` | `provide_result` | `provide_async` | `provide_result_async` |
+| **Singleton, module-private** | `provide_private` | `provide_result_private` | `provide_async_private` | `provide_result_async_private` |
+| **Group member** [`provide_group`](#groups) | `provide_group` | `provide_group_result` | `provide_group_async` | `provide_group_result_async` |
+| **Pre-built value** | `supply` / `supply_private` | — | — | — |
+| **Graph root** [`invoke`](#invoke) | `invoke` *(also accepts `Result`)* | *(same)* | `invoke_async` | *(same)* |
+
+[`invoke`](#invoke) does **not** use `_result` suffixes: a fallible invoker returns
+`Result<(), E>` from plain `invoke` / `invoke_async`. Only constructors split
+`provide` vs `provide_result` at compile time.
+
+Only [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html):
+[`init_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.init_group),
+[`require_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.require_group),
+[`supply_group`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.supply_group).
+
+### Common patterns
+
+Three shapes cover most apps. Each maps to an example:
+
+| Pattern | When | Example |
+|---------|------|---------|
+| **Domain module** | Hide internal types; expose only services | [`basic`](examples/basic.rs) — `provide_private` + public `provide` + `invoke` |
+| **Group** | Many modules contribute the same element type | [`handlers`](examples/handlers.rs) — `provide_group` → inject `Group<T>` at root |
+| **Wrapper** | Metrics, naming, timeouts without a `decorate` API | [`wrap`](examples/wrap.rs) — compose in one ctor, or `provide_private` + newtype |
+
+**Domain module** — private repo, public service, module-local invoker:
+
+```text
+fn user_domain() -> Module {
+    Module::new("user")
+        .provide_private(new_user_repo)
+        .provide(new_user_service)
+        .invoke(register_user_hooks)
+}
+
+Modrun::builder().module(user_domain()).invoke(boot).run().await
+```
+
+**Group** — plugins, routes, handlers from many modules:
+
+```text
+Modrun::builder()
+    .module(Module::new("user").provide_group(user_routes))
+    .module(Module::new("order").provide_group(order_routes))
+    .invoke(|routes: Group<Route>| mount(routes))
+```
+
+**Wrapper** — see [Cross-cutting concerns](#cross-cutting-concerns-wrapper-constructors) and [`wrap.rs`](examples/wrap.rs).
+
+Replaceable dependencies and test doubles belong at the **composition root** with
+[`supply`](#supply), not inside a module — see [`swap`](examples/swap.rs).
 
 ### Provide variants
 
@@ -158,6 +216,8 @@ continue in dependency order.
 ### Supply
 
 **`supply`** hands the container a value you already have, skipping the constructor.
+
+### Invoke
 
 **`invoke`** pulls the graph. An invoker's parameters are the roots of what gets
 built, so a type nobody invokes (directly or transitively) is never constructed.
@@ -339,11 +399,6 @@ newtypes (same as duplicate singletons).
 | `provide_group_result_async` | async fallible |
 | `supply_group` | pre-built member value |
 | `init_group` / `require_group` | composition root only; empty vs non-empty policy |
-
-`provide_group_dyn` is for wrapper libraries via [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html)
-(same rule as `provide_dyn`, all `#[doc(hidden)]`). All methods
-also have `_mut` variants on [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)
-and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html).
 
 ## Dependency graph
 

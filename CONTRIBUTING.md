@@ -38,27 +38,39 @@ Modrun::builder()
     .invoke(boot)
 ```
 
-**Wrapper libraries** that re-export modrun wiring may use:
+**Wrapper libraries** that re-export modrun wiring use the hidden [`__wiring`](src/lib.rs)
+module and `#[doc(hidden)]` builder methods. These are omitted from docs.rs navigation
+and are not part of the application-facing stability promise:
 
-- `ProviderFn` / `InvokeFn` marker traits
-- `into_provider()` / `into_invoke()`
-- `provide_dyn` / `invoke_dyn` / `provide_group_dyn`
+```rust
+use modrun::__wiring::{DynProvider, InvokeFn, ProviderFn};
 
-These erase types for generic wrappers; they are not part of the application-facing model.
+let provider: DynProvider = my_ctor.into_provider();
+builder.provide_dyn(provider).invoke_dyn(my_boot.into_invoke());
+```
+
+Available in `modrun::__wiring`:
+
+* `ProviderFn`, `FallibleProviderFn`, `AsyncProviderFn`, `FallibleAsyncProviderFn`, `ProviderMarker`
+* `InvokeFn`, `AsyncInvokeFn`
+* `DynProvider`, `DynInvoker`
+
+Builder: `provide_dyn`, `invoke_dyn`, `provide_group_dyn` (+ `_mut` / `_private` variants),
+all `#[doc(hidden)]`.
 
 ## Deliberately rejected
 
 We will not add APIs for:
 
-- Property or field injection
-- Runtime string tokens / named bindings (`"primary"` vs `"replica"`) — use newtypes
-- Annotations, derives, or auto-scanning
-- Macro-generated entire containers
-- Service locator (`get<T>()` after build)
-- Global singleton registries
-- `fx.Populate`, `fx.Annotate`, or `fx.Replace` equivalents
-- First-class `decorate` — use [wrapper constructors](examples/wrap.rs) instead
-- Module-to-module event buses (not in scope today)
+* Property or field injection
+* Runtime string tokens / named bindings (`"primary"` vs `"replica"`) — use newtypes
+* Annotations, derives, or auto-scanning
+* Macro-generated entire containers
+* Service locator (`get<T>()` after build)
+* Global singleton registries
+* `fx.Populate`, `fx.Annotate`, or `fx.Replace` equivalents
+* First-class `decorate` — use [wrapper constructors](examples/wrap.rs) instead
+* Module-to-module event buses (not in scope today)
 
 Internal `Container::get` exists **only** during build (`pub(crate)`); it must never become public.
 

@@ -12,6 +12,18 @@ macro_rules! impl_wiring_methods {
             /// Constructors that return `Result<T, E>` must use
             /// [`provide_result`](Self::provide_result) instead; passing one here
             /// is a compile error.
+            ///
+            /// ```compile_fail
+            /// # use modrun::Modrun;
+            /// #[derive(Clone)]
+            /// struct Config;
+            ///
+            /// fn new_config() -> Result<Config, std::io::Error> {
+            ///     Ok(Config)
+            /// }
+            ///
+            /// Modrun::builder().provide(new_config);
+            /// ```
             #[must_use]
             pub fn provide<M, F>(mut self, ctor: F) -> Self
             where
@@ -88,15 +100,17 @@ macro_rules! impl_wiring_methods {
             }
 
             /// Register an already-erased constructor, from
-            /// [`ProviderFn::into_provider`](crate::ProviderFn::into_provider).
+            /// [`ProviderFn::into_provider`](crate::__wiring::ProviderFn::into_provider).
+            #[doc(hidden)]
             #[must_use]
-            pub fn provide_dyn(mut self, provider: $crate::DynProvider) -> Self {
+            pub fn provide_dyn(mut self, provider: $crate::__wiring::DynProvider) -> Self {
                 self.provide_dyn_mut(provider);
                 self
             }
 
             /// [`provide_dyn`](Self::provide_dyn) for `&mut self`.
-            pub fn provide_dyn_mut(&mut self, provider: $crate::DynProvider) -> &mut Self {
+            #[doc(hidden)]
+            pub fn provide_dyn_mut(&mut self, provider: $crate::__wiring::DynProvider) -> &mut Self {
                 self.push_option($crate::provide::provide_dyn(provider));
                 self
             }
@@ -154,15 +168,17 @@ macro_rules! impl_wiring_methods {
             }
 
             /// Register an already-erased invoker, from
-            /// [`InvokeFn::into_invoke`](crate::InvokeFn::into_invoke).
+            /// [`InvokeFn::into_invoke`](crate::__wiring::InvokeFn::into_invoke).
+            #[doc(hidden)]
             #[must_use]
-            pub fn invoke_dyn(mut self, invoker: $crate::DynInvoker) -> Self {
+            pub fn invoke_dyn(mut self, invoker: $crate::__wiring::DynInvoker) -> Self {
                 self.invoke_dyn_mut(invoker);
                 self
             }
 
             /// [`invoke_dyn`](Self::invoke_dyn) for `&mut self`.
-            pub fn invoke_dyn_mut(&mut self, invoker: $crate::DynInvoker) -> &mut Self {
+            #[doc(hidden)]
+            pub fn invoke_dyn_mut(&mut self, invoker: $crate::__wiring::DynInvoker) -> &mut Self {
                 self.push_option($crate::invoke::invoke_dyn(invoker));
                 self
             }
@@ -254,14 +270,16 @@ macro_rules! impl_private_wiring_methods {
             }
 
             /// Like [`provide_dyn`](Self::provide_dyn), scoped privately to the module.
+            #[doc(hidden)]
             #[must_use]
-            pub fn provide_dyn_private(mut self, provider: $crate::DynProvider) -> Self {
+            pub fn provide_dyn_private(mut self, provider: $crate::__wiring::DynProvider) -> Self {
                 self.provide_dyn_private_mut(provider);
                 self
             }
 
             /// [`provide_dyn_private`](Self::provide_dyn_private) for `&mut self`.
-            pub fn provide_dyn_private_mut(&mut self, provider: $crate::DynProvider) -> &mut Self {
+            #[doc(hidden)]
+            pub fn provide_dyn_private_mut(&mut self, provider: $crate::__wiring::DynProvider) -> &mut Self {
                 self.push_option($crate::provide::provide_dyn_priv(provider));
                 self
             }
@@ -403,20 +421,22 @@ macro_rules! impl_group_wiring_methods {
             }
 
             /// Register an already-erased group member, from
-            /// [`ProviderFn::into_provider`](crate::ProviderFn::into_provider).
+            /// [`ProviderFn::into_provider`](crate::__wiring::ProviderFn::into_provider).
+            #[doc(hidden)]
             #[must_use]
             pub fn provide_group_dyn<T: Clone + Send + Sync + 'static>(
                 mut self,
-                provider: $crate::DynProvider,
+                provider: $crate::__wiring::DynProvider,
             ) -> Self {
                 self.provide_group_dyn_mut::<T>(provider);
                 self
             }
 
             /// [`provide_group_dyn`](Self::provide_group_dyn) for `&mut self`.
+            #[doc(hidden)]
             pub fn provide_group_dyn_mut<T: Clone + Send + Sync + 'static>(
                 &mut self,
-                provider: $crate::DynProvider,
+                provider: $crate::__wiring::DynProvider,
             ) -> &mut Self {
                 self.push_option($crate::provide_group::provide_group_dyn::<T>(provider));
                 self

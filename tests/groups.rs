@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use modrun::{Group, Modrun, Module, ProviderFn};
+use modrun::__wiring::ProviderFn;
+use modrun::{Group, Modrun, Module};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Route(&'static str);

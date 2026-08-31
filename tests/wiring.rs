@@ -303,7 +303,7 @@ async fn empty_builder_starts_and_stops() {
 async fn provide_dyn_and_invoke_dyn() {
     use std::any::TypeId;
 
-    use modrun::{InvokeFn, ProviderFn};
+    use modrun::__wiring::{InvokeFn, ProviderFn};
 
     #[derive(Clone)]
     struct N(u8);

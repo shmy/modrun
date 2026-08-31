@@ -90,7 +90,7 @@ async fn main() -> modrun::Result<()> {
 | `provide_async` | `async fn(...) -> T` |
 | `provide_result_async` | `async fn(...) -> Result<T, E>` |
 
-返回 `Result` 的构造函数交给普通 `provide` 会 **编译失败**（编译器会指向 `provide_result`）。组成员用 `provide_group_*` 前缀，同样四选一。[`provide_dyn`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_dyn) 等仅给 **wrapper 库** 用；应用代码应注册普通函数。
+返回 `Result` 的构造函数交给普通 `provide` 会 **编译失败**（编译器会指向 `provide_result`）。组成员用 `provide_group_*` 前缀，同样四选一。类型擦除的 `provide_dyn` / `invoke_dyn` / `provide_group_dyn` 在 [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html) 下，仅供 wrapper 库使用（`#[doc(hidden)]`，不出现在应用文档里）。
 
 ### 横切关注点（wrapper 构造函数）
 
@@ -263,7 +263,7 @@ trait object 组让构造函数返回 `Arc<dyn Trait>`。模块内
 | `supply_group` | 已有实例 |
 | `init_group` / `require_group` | 仅组合根；空组 / 非空策略 |
 
-`provide_group_dyn` 仅给 wrapper 库（规则同 `provide_dyn`）。所有方法在 [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
+`provide_group_dyn` 仅供 wrapper 库通过 [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html) 使用（规则同 `provide_dyn`，均为 `#[doc(hidden)]`）。所有方法在 [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html) /
 [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html) 上也有 `_mut` 变体。
 
 ## 依赖图

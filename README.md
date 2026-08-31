@@ -105,8 +105,9 @@ Pick the method that matches your constructor signature — not a separate DI co
 
 Returning `Result` from plain `provide` is a **compile error** (modrun points you at
 `provide_result`). Group members follow the same four-way split with a `provide_group_*`
-prefix. [`provide_dyn`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html#method.provide_dyn)
-and friends are for **wrapper libraries only**; application code should register plain functions.
+prefix. Type-erased `provide_dyn` / `invoke_dyn` / `provide_group_dyn` live under
+[`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html) for
+wrapper libraries only (`#[doc(hidden)]`, not shown in application docs).
 
 ### Cross-cutting concerns (wrapper constructors)
 
@@ -339,7 +340,8 @@ newtypes (same as duplicate singletons).
 | `supply_group` | pre-built member value |
 | `init_group` / `require_group` | composition root only; empty vs non-empty policy |
 
-`provide_group_dyn` is for wrapper libraries (same rule as `provide_dyn`). All methods
+`provide_group_dyn` is for wrapper libraries via [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html)
+(same rule as `provide_dyn`, all `#[doc(hidden)]`). All methods
 also have `_mut` variants on [`ModrunBuilder`](https://docs.rs/modrun/latest/modrun/struct.ModrunBuilder.html)
 and [`Module`](https://docs.rs/modrun/latest/modrun/struct.Module.html).
 

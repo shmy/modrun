@@ -103,30 +103,7 @@ impl ModOption for ProvideOption {
 }
 
 /// Bound for constructors accepted by [`ModrunBuilder::provide`](crate::ModrunBuilder::provide).
-///
-/// Constructors that return `Result<T, E>` must use
-/// [`provide_result`](crate::ModrunBuilder::provide_result) instead. Passing one
-/// to `provide` does not compile:
-///
-/// ```compile_fail
-/// # use modrun::Modrun;
-/// #[derive(Clone)]
-/// struct Config;
-///
-/// fn new_config() -> Result<Config, std::io::Error> {
-///     Ok(Config)
-/// }
-///
-/// // error[E0283]: cannot infer type of the type parameter `M`
-/// Modrun::builder().provide(new_config);
-/// ```
-///
-/// Implemented for any `Fn(A, B, ..) -> T` of up to **eight** `Clone` arguments.
-/// Constructor closures must be `Send + Sync`; keep `!Sync` state inside `T` or
-/// register it from an invoker (invokers are only `Send`).
-/// The result type itself need not be `Clone`; inject `Arc<T>` to avoid a copy.
-/// `Marker` distinguishes those arities and is always inferred — do not name
-/// these types in application code.
+#[doc(hidden)]
 pub trait ProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;
@@ -134,6 +111,7 @@ pub trait ProviderFn<Marker>: Sized {
 
 /// Bound for fallible constructors accepted by
 /// [`ModrunBuilder::provide_result`](crate::ModrunBuilder::provide_result).
+#[doc(hidden)]
 pub trait FallibleProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;
@@ -141,10 +119,7 @@ pub trait FallibleProviderFn<Marker>: Sized {
 
 /// Bound for async constructors accepted by
 /// [`ModrunBuilder::provide_async`](crate::ModrunBuilder::provide_async).
-///
-/// As with [`ProviderFn`], an `async fn` returning `Result<T, E>` belongs on
-/// [`provide_result_async`](crate::ModrunBuilder::provide_result_async) and does
-/// not compile here.
+#[doc(hidden)]
 pub trait AsyncProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;
@@ -152,15 +127,14 @@ pub trait AsyncProviderFn<Marker>: Sized {
 
 /// Bound for fallible async constructors accepted by
 /// [`ModrunBuilder::provide_result_async`](crate::ModrunBuilder::provide_result_async).
+#[doc(hidden)]
 pub trait FallibleAsyncProviderFn<Marker>: Sized {
     /// Erase the constructor's signature into a provider the container can call.
     fn into_provider(self) -> DynProvider;
 }
 
 /// Extract the output type from a [`ProviderFn`] marker.
-///
-/// Used by [`ModrunBuilder::provide_group`](crate::ModrunBuilder::provide_group)
-/// and related group wiring when wrapping constructors.
+#[doc(hidden)]
 pub trait ProviderMarker {
     /// Value produced by constructors with this marker.
     type Output: Clone + Send + Sync + 'static;
@@ -214,6 +188,7 @@ type ConstructFn = Box<dyn Fn(&mut Container) -> Result<ConstructOut> + Send + S
 
 /// A constructor with its signature erased, ready to be registered via
 /// [`ModrunBuilder::provide_dyn`](crate::ModrunBuilder::provide_dyn).
+#[doc(hidden)]
 pub struct DynProvider {
     result_type: TypeId,
     result_name: &'static str,

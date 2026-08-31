@@ -57,10 +57,7 @@ impl ModOption for InvokeOption {
 }
 
 /// Bound for functions accepted by [`ModrunBuilder::invoke`](crate::ModrunBuilder::invoke).
-///
-/// Implemented for any `FnOnce(A, B, ..)` of up to **eight** `Clone` arguments, returning
-/// either `()` or `Result<(), E>`. `Marker` distinguishes those shapes and is
-/// always inferred.
+#[doc(hidden)]
 pub trait InvokeFn<Marker>: Sized {
     /// Erase the function's signature into an invoker the container can call.
     fn into_invoke(self) -> DynInvoker;
@@ -68,6 +65,7 @@ pub trait InvokeFn<Marker>: Sized {
 
 /// An invoker with its signature erased, ready to be registered via
 /// [`ModrunBuilder::invoke_dyn`](crate::ModrunBuilder::invoke_dyn).
+#[doc(hidden)]
 pub struct DynInvoker {
     inner: Box<dyn Invoker>,
 }
@@ -342,6 +340,7 @@ where
 ///
 /// Implemented for any `async fn(A, B, ..)` of up to **eight** `Clone` arguments,
 /// returning either `()` or `Result<(), E>`.
+#[doc(hidden)]
 pub trait AsyncInvokeFn<Marker>: Sized {
     /// Erase the function's signature into an invoker the container can call.
     fn into_invoke(self) -> DynInvoker;

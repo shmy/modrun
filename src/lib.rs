@@ -175,8 +175,8 @@
 //! does not compile `--all-targets`).
 //!
 //! Application code should use [`ModrunBuilder::provide`] /
-//! [`ModrunBuilder::invoke`], not the [`ProviderFn`] / [`ProviderMarker`] marker types
-//! or [`ModrunBuilder::provide_dyn`] / [`ModrunBuilder::invoke_dyn`] (wrapper authors only).
+//! [`ModrunBuilder::invoke`]. Wrapper libraries use the hidden [`__wiring`] module
+//! and `ModrunBuilder::provide_dyn` / `invoke_dyn` (also `#[doc(hidden)]`).
 //!
 //! # Crate features
 //!
@@ -227,15 +227,19 @@ pub use timeout::DEFAULT_TIMEOUT;
 #[cfg(feature = "logging")]
 pub mod logging;
 
-/// Constructor and invoker bounds, for code that wraps modrun's wiring API.
-/// Application code should not name the marker types; convert with
-/// [`ProviderFn::into_provider`] / [`InvokeFn::into_invoke`], then register with
-/// [`ModrunBuilder::provide_dyn`] / [`ModrunBuilder::invoke_dyn`].
-pub use invoke::{AsyncInvokeFn, DynInvoker, InvokeFn};
-pub use provide::{
-    AsyncProviderFn, DynProvider, FallibleAsyncProviderFn, FallibleProviderFn, ProviderFn,
-    ProviderMarker,
-};
+/// Type-erased wiring traits and erased provider/invoker types.
+///
+/// For **wrapper libraries** that re-export modrun's builder API. Not part of the
+/// application-facing model and omitted from docs.rs navigation (`#[doc(hidden)]`).
+/// Semver: treat as unstable relative to the typed `provide` / `invoke` surface.
+#[doc(hidden)]
+pub mod __wiring {
+    pub use crate::invoke::{AsyncInvokeFn, DynInvoker, InvokeFn};
+    pub use crate::provide::{
+        AsyncProviderFn, DynProvider, FallibleAsyncProviderFn, FallibleProviderFn, ProviderFn,
+        ProviderMarker,
+    };
+}
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

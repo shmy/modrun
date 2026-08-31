@@ -17,35 +17,32 @@ impl ScopeId {
 #[derive(Debug)]
 struct ScopeNode {
     name: &'static str,
-    parent: Option<ScopeId>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ScopeTree {
     nodes: Vec<ScopeNode>,
+    /// Precomputed ancestor chains: `start`, parent, …, [`ScopeId::ROOT`].
+    /// Extended incrementally in [`child`](Self::child).
+    ancestors: Vec<Box<[ScopeId]>>,
 }
 
 impl ScopeTree {
     pub(crate) fn new() -> Self {
         Self {
-            nodes: vec![ScopeNode {
-                name: "<root>",
-                parent: None,
-            }],
+            nodes: vec![ScopeNode { name: "<root>" }],
+            ancestors: vec![Box::new([ScopeId::ROOT])],
         }
     }
 
     pub(crate) fn child(&mut self, parent: ScopeId, name: &'static str) -> ScopeId {
         let id = ScopeId(u32::try_from(self.nodes.len()).expect("scope id space exhausted"));
-        self.nodes.push(ScopeNode {
-            name,
-            parent: Some(parent),
-        });
+        self.nodes.push(ScopeNode { name });
+        let mut chain = Vec::with_capacity(self.ancestors[parent.index()].len() + 1);
+        chain.push(id);
+        chain.extend_from_slice(&self.ancestors[parent.index()]);
+        self.ancestors.push(chain.into_boxed_slice());
         id
-    }
-
-    pub(crate) fn parent(&self, id: ScopeId) -> Option<ScopeId> {
-        self.nodes.get(id.index()).and_then(|n| n.parent)
     }
 
     pub(crate) fn name(&self, id: ScopeId) -> &'static str {
@@ -55,28 +52,31 @@ impl ScopeTree {
             .unwrap_or("<unknown>")
     }
 
-    /// Walk from `start` up to root (inclusive), without allocating.
-    pub(crate) fn ancestors_from(&self, start: ScopeId) -> Ancestors<'_> {
-        Ancestors {
-            tree: self,
-            current: Some(start),
+    /// Walk from `start` up to root (inclusive). Uses a precomputed chain per scope.
+    pub(crate) fn ancestors_from(&self, start: ScopeId) -> AncestorIter<'_> {
+        AncestorIter::Cached {
+            chain: &self.ancestors[start.index()],
+            pos: 0,
         }
     }
 }
 
 /// Iterator over ancestor scopes from a starting scope up to root.
-pub(crate) struct Ancestors<'a> {
-    tree: &'a ScopeTree,
-    current: Option<ScopeId>,
+pub(crate) enum AncestorIter<'a> {
+    Cached { chain: &'a [ScopeId], pos: usize },
 }
 
-impl Iterator for Ancestors<'_> {
+impl Iterator for AncestorIter<'_> {
     type Item = ScopeId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let id = self.current?;
-        self.current = self.tree.parent(id);
-        Some(id)
+        let Self::Cached { chain, pos } = self;
+        if *pos >= chain.len() {
+            return None;
+        }
+        let scope = chain[*pos];
+        *pos += 1;
+        Some(scope)
     }
 }
 

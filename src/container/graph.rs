@@ -134,12 +134,16 @@ impl Container {
         &mut self,
         invoker_deps: &[(ScopeId, &[(TypeId, &'static str)])],
     ) -> Result<()> {
+        let mut can_resolve = TypeIdMap::<(TypeId, ScopeId), bool>::default();
+        let mut value_satisfies = TypeIdMap::<(TypeId, ScopeId), bool>::default();
+        let mut provider_keys = TypeIdMap::<(TypeId, ScopeId), Option<ProviderKey>>::default();
+
         for &key in &self.provider_order {
             let Some(provider) = self.provider_at(key) else {
                 continue;
             };
             for &(dep_id, dep_name) in provider.dep_types() {
-                if self.can_resolve(dep_id, key.scope) {
+                if self.can_resolve_cached(dep_id, key.scope, &mut can_resolve) {
                     continue;
                 }
                 return Err(Error::ProviderMissingDep {
@@ -152,7 +156,7 @@ impl Container {
 
         for &(scope, deps) in invoker_deps {
             for &(dep_id, dep_name) in deps {
-                if self.can_resolve(dep_id, scope) {
+                if self.can_resolve_cached(dep_id, scope, &mut can_resolve) {
                     continue;
                 }
                 return Err(Error::InvokerMissingDep {
@@ -163,8 +167,11 @@ impl Container {
         }
 
         self.validate_required_groups()?;
-        self.detect_cycles()?;
-        self.freeze_layers()
+        match self.freeze_layers(&mut value_satisfies, &mut provider_keys) {
+            Ok(()) => Ok(()),
+            Err(Error::Cycle(_)) => self.detect_cycles(),
+            Err(err) => Err(err),
+        }
     }
 
     fn validate_required_groups(&self) -> Result<()> {
@@ -181,7 +188,11 @@ impl Container {
         Ok(())
     }
 
-    fn freeze_layers(&mut self) -> Result<()> {
+    fn freeze_layers(
+        &mut self,
+        value_satisfies: &mut TypeIdMap<(TypeId, ScopeId), bool>,
+        provider_keys: &mut TypeIdMap<(TypeId, ScopeId), Option<ProviderKey>>,
+    ) -> Result<()> {
         let mut indegree = TypeIdMap::default();
         let mut dependents: TypeIdMap<ProviderKey, Vec<ProviderKey>> = TypeIdMap::default();
         for &key in &self.provider_order {
@@ -190,10 +201,12 @@ impl Container {
             };
             let mut degree = 0usize;
             for &(dep_id, _) in provider.dep_types() {
-                if self.value_satisfies(dep_id, key.scope) {
+                if self.value_satisfies_cached(dep_id, key.scope, value_satisfies) {
                     continue;
                 }
-                if let Some((dep_key, _)) = self.resolve_provider(dep_id, key.scope) {
+                if let Some(dep_key) =
+                    self.resolve_provider_key_cached(dep_id, key.scope, provider_keys)
+                {
                     degree += 1;
                     dependents.entry(dep_key).or_default().push(key);
                 }
@@ -272,6 +285,52 @@ impl Container {
             }
         }
         self.values_public.contains_key(&id) || self.resolve_provider(id, from).is_some()
+    }
+
+    fn can_resolve_cached(
+        &self,
+        id: TypeId,
+        from: ScopeId,
+        cache: &mut TypeIdMap<(TypeId, ScopeId), bool>,
+    ) -> bool {
+        if let Some(&hit) = cache.get(&(id, from)) {
+            return hit;
+        }
+        let hit = self.can_resolve(id, from);
+        cache.insert((id, from), hit);
+        hit
+    }
+
+    fn resolve_provider_key(&self, id: TypeId, from: ScopeId) -> Option<ProviderKey> {
+        self.resolve_provider(id, from).map(|(key, _)| key)
+    }
+
+    fn resolve_provider_key_cached(
+        &self,
+        id: TypeId,
+        from: ScopeId,
+        cache: &mut TypeIdMap<(TypeId, ScopeId), Option<ProviderKey>>,
+    ) -> Option<ProviderKey> {
+        if let Some(hit) = cache.get(&(id, from)) {
+            return *hit;
+        }
+        let hit = self.resolve_provider_key(id, from);
+        cache.insert((id, from), hit);
+        hit
+    }
+
+    fn value_satisfies_cached(
+        &self,
+        id: TypeId,
+        from: ScopeId,
+        cache: &mut TypeIdMap<(TypeId, ScopeId), bool>,
+    ) -> bool {
+        if let Some(&hit) = cache.get(&(id, from)) {
+            return hit;
+        }
+        let hit = self.value_satisfies(id, from);
+        cache.insert((id, from), hit);
+        hit
     }
 
     fn value_satisfies(&self, id: TypeId, from: ScopeId) -> bool {

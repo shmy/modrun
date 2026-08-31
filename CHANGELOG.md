@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Group aggregation collects members without cloning the member key list.
 * Constructor trace path checks `tracing` INFO once per provider when logging is off.
+* Graph validation caches dependency resolution during `validate` / `freeze_layers`, and skips the DFS cycle pass on the success path (runs only when layer sorting detects a cycle, for a readable path).
+* Scope ancestor walks use incrementally built chains (slice iteration instead of parent-pointer hops).
 
 ## \[1.0.0] - 2026-08-31
 

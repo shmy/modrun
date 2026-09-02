@@ -7,17 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Changed
+## [1.0.0] - 2026-09-02
 
-* **Breaking:** structured trace field `elapsed_ms` (integer milliseconds, sub-ms values truncated to `0`) is replaced by `elapsed` (human-readable string matching `{runtime:?}`, e.g. `"806.417µs"`, `"2.174542ms"`). Affects `RUN`, `HOOK OnStart`, and `HOOK OnStop` success events.
-* Group aggregation collects members without cloning the member key list.
-* Constructor trace path checks `tracing` INFO once per provider when logging is off.
-* Graph validation caches dependency resolution during `validate` / `freeze_layers`, and skips the DFS cycle pass on the success path (runs only when layer sorting detects a cycle, for a readable path).
-* Scope ancestor walks use incrementally built chains (slice iteration instead of parent-pointer hops).
-
-## \[1.0.0] - 2026-08-31
-
-First stable release. Application-facing API is frozen; see [CONTRIBUTING.md](CONTRIBUTING.md)
+First stable release on [crates.io](https://crates.io/crates/modrun). Application-facing API is frozen; see [CONTRIBUTING.md](CONTRIBUTING.md)
 for the stability promise and semver rules. Type-erased wiring in [`modrun::__wiring`](https://docs.rs/modrun/latest/modrun/__wiring/index.html)
 remains intentionally unstable relative to typed `provide` / `invoke`.
 
@@ -28,7 +20,7 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 * [`task`](https://docs.rs/modrun/latest/modrun/fn.task.html) / [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html) for long-running OnStart work. OnStop signals the task and joins; drop aborts leftover work.
 * [`task_with`](https://docs.rs/modrun/latest/modrun/fn.task_with.html) / [`PreparedTask`](https://docs.rs/modrun/latest/modrun/struct.PreparedTask.html): await setup (bind/listen) during OnStart so those failures fail start, then spawn the rest.
 * [`logging::try_init`](https://docs.rs/modrun/latest/modrun/logging/fn.try_init.html) / `try_init_with_filter` so callers can detect an existing subscriber.
-* Structured tracing fields (`constructor`, `module`, `elapsed_ms`, `error`, …) on framework events, while the `logging` helper still prints fx-style console lines.
+* Structured tracing fields (`constructor`, `module`, `elapsed`, `error`, …) on framework events, while the `logging` helper still prints fx-style console lines.
 * `worker` example: async constructors, primary/replica newtypes, and a `task` that selects on [`Stopped`](https://docs.rs/modrun/latest/modrun/struct.Stopped.html).
 * `swap` example: `supply` a test double at the composition root instead of `provide` inside a module.
 * Chinese README (`README_zh.md`).
@@ -55,3 +47,5 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 
 * OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.
 * OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.
+
+[1.0.0]: https://github.com/shmy/modrun/releases/tag/v1.0.0

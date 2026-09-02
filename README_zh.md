@@ -1,8 +1,16 @@
 # modrun
 
+[![crates.io](https://img.shields.io/crates/v/modrun.svg)](https://crates.io/crates/modrun)
+[![docs.rs](https://docs.rs/modrun/badge.svg)](https://docs.rs/modrun)
+
 [English](README.md) | 简体中文
 
 **面向 Rust 的模块化应用组合器。**
+
+```toml
+[dependencies]
+modrun = "1.0"
+```
 
 把大型 Tokio 服务拆成面向领域的模块：构造函数注入、显式模块边界、统一生命周期编排——在组合根一次性接线。
 

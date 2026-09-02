@@ -1,8 +1,16 @@
 # modrun
 
+[![crates.io](https://img.shields.io/crates/v/modrun.svg)](https://crates.io/crates/modrun)
+[![docs.rs](https://docs.rs/modrun/badge.svg)](https://docs.rs/modrun)
+
 [English](README.md) | [简体中文](README_zh.md)
 
 **A modular application composer for Rust.**
+
+```toml
+[dependencies]
+modrun = "1.0"
+```
 
 Build large Tokio services as domain-oriented modules with constructor injection,
 explicit module boundaries, and coordinated lifecycle — wired once at the composition root.

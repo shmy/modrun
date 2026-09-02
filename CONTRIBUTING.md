@@ -120,3 +120,26 @@ cargo run --example basic
 
 Please run tests before opening a PR. Commit messages use Conventional Commits in Chinese
 (项目惯例).
+
+## Releasing
+
+Publishing is automated by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+when a version tag is pushed.
+
+**One-time setup:** add a crates.io API token as the repository secret
+`CARGO_REGISTRY_TOKEN` (Settings → Secrets and variables → Actions).
+
+**Per release:**
+
+1. Update `CHANGELOG.md` (move notes from `Unreleased` into `## [x.y.z] - YYYY-MM-DD`).
+2. Bump `version` in `Cargo.toml`.
+3. Commit and push to `main`.
+4. Tag and push:
+
+   ```bash
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+
+The workflow checks that the tag matches `Cargo.toml`, runs fmt/clippy/tests/doc, publishes
+to crates.io, and opens a GitHub Release with the matching `CHANGELOG` section.

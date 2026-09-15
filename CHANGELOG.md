@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [1.0.1] - 2026-09-15
+
+Maintenance release; no application API changes.
+
+### Changed
+
+* Dev-dependency `criterion` upgraded to 0.8 (benchmarks only).
+
 ## [1.0.0] - 2026-09-02
 
 First stable release on [crates.io](https://crates.io/crates/modrun). Application-facing API is frozen; see [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -48,4 +56,5 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 * OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.
 * OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.
 
+[1.0.1]: https://github.com/shmy/modrun/releases/tag/v1.0.1
 [1.0.0]: https://github.com/shmy/modrun/releases/tag/v1.0.0

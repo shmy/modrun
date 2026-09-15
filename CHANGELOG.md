@@ -57,4 +57,5 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 * OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.
 
 [1.0.1]: https://github.com/shmy/modrun/releases/tag/v1.0.1
+
 [1.0.0]: https://github.com/shmy/modrun/releases/tag/v1.0.0

@@ -7,13 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [1.0.2] - 2026-09-15
+
+### Fixed
+
+* Pin dev-dependency `criterion` to 0.7 (0.8 requires Rust 1.86; this crate's MSRV is 1.85).
+
 ## [1.0.1] - 2026-09-15
 
 Maintenance release; no application API changes.
 
 ### Changed
 
-* Dev-dependency `criterion` upgraded to 0.7 (benchmarks only; 0.8 requires Rust 1.86, above this crate's MSRV 1.85).
+* Dev-dependency `criterion` upgraded to 0.8 (benchmarks only).
 
 ## [1.0.0] - 2026-09-02
 
@@ -56,6 +62,7 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 * OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.
 * OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.
 
+[1.0.2]: https://github.com/shmy/modrun/releases/tag/v1.0.2
 [1.0.1]: https://github.com/shmy/modrun/releases/tag/v1.0.1
 
 [1.0.0]: https://github.com/shmy/modrun/releases/tag/v1.0.0

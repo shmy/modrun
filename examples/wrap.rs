@@ -9,6 +9,7 @@
 //! cargo run --example wrap
 //! ```
 
+use modrun::logging::init;
 use modrun::{Modrun, Module, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +77,7 @@ fn boot(log: Logger) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    modrun::logging::init();
+    init();
 
     println!("-- module + newtype wrapper --");
     Modrun::builder()

@@ -3,6 +3,7 @@ use crate::error::Result;
 use crate::app::BuildState;
 use crate::option::ModOption;
 use crate::wiring::{impl_group_wiring_methods, impl_private_wiring_methods, impl_wiring_methods};
+use std::fmt;
 
 /// A named domain module.
 ///
@@ -42,8 +43,8 @@ pub struct Module {
     options: Vec<Box<dyn ModOption>>,
 }
 
-impl std::fmt::Debug for Module {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Module")
             .field("name", &self.name)
             .field("options", &self.options.len())

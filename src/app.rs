@@ -1,16 +1,44 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::banner::Banner;
+use crate::banner::emit;
 use crate::container::{Container, seed_builtins};
 use crate::error::{Error, Result, combine_results, with_cleanup};
+use crate::graph::render_dot;
+use crate::invoke::InvokeOut;
 use crate::invoke::ScopedInvoker;
 use crate::lifecycle::Lifecycle;
 use crate::module::Module;
 use crate::option::ModOption;
+use crate::provide_group::init_group;
+use crate::provide_group::require_group;
 use crate::scope::ScopeId;
 use crate::shutdown::Shutdowner;
 use crate::timeout::DEFAULT_TIMEOUT;
+use crate::trace;
+use crate::trace::dot_graph_written;
+use crate::trace::emit_unfinished;
+use crate::trace::hooks_abandoned;
+use crate::trace::invoke_cancelled;
+use crate::trace::invoke_failed;
+use crate::trace::invoke_panicked;
+use crate::trace::invoking;
+use crate::trace::rollback_failed;
+use crate::trace::rolled_back;
+use crate::trace::rolling_back;
+use crate::trace::running_app_dropped;
+use crate::trace::start_failed;
+use crate::trace::stop_failed;
+use crate::trace::stopped;
 use crate::wiring::{impl_group_wiring_methods, impl_wiring_methods};
+use std::borrow::Cow;
+use std::fmt;
+use std::fs::write;
+use std::future::Future;
+use std::mem::take;
+use std::time::Instant;
+use tokio::time::timeout;
 
 /// Entry point for configuring an application: [`Modrun::builder`].
 #[derive(Debug)]
@@ -42,7 +70,7 @@ pub struct Modrun;
 /// ```
 pub struct ModrunBuilder {
     options: Vec<Box<dyn ModOption>>,
-    banner: crate::banner::Banner,
+    banner: Banner,
     build_timeout: Option<Duration>,
     start_timeout: Option<Duration>,
     stop_timeout: Option<Duration>,
@@ -53,7 +81,7 @@ impl Default for ModrunBuilder {
     fn default() -> Self {
         Self {
             options: Vec::new(),
-            banner: crate::banner::Banner::default(),
+            banner: Banner::default(),
             build_timeout: Some(DEFAULT_TIMEOUT),
             start_timeout: Some(DEFAULT_TIMEOUT),
             stop_timeout: Some(DEFAULT_TIMEOUT),
@@ -62,8 +90,8 @@ impl Default for ModrunBuilder {
     }
 }
 
-impl std::fmt::Debug for ModrunBuilder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ModrunBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModrunBuilder")
             .field("options", &self.options.len())
             .field("banner", &self.banner)
@@ -180,8 +208,8 @@ impl ModrunBuilder {
     /// [`start`](Self::start), before framework tracing events. Unlike the
     /// default banner, custom text is printed even when stderr is not a TTY.
     #[must_use]
-    pub fn banner(mut self, text: impl Into<std::borrow::Cow<'static, str>>) -> Self {
-        self.banner = crate::banner::Banner::Custom(text.into());
+    pub fn banner(mut self, text: impl Into<Cow<'static, str>>) -> Self {
+        self.banner = Banner::Custom(text.into());
         self
     }
 
@@ -191,7 +219,7 @@ impl ModrunBuilder {
     /// from tests that run in a terminal, or when the ASCII art is never wanted.
     #[must_use]
     pub fn no_banner(mut self) -> Self {
-        self.banner = crate::banner::Banner::Off;
+        self.banner = Banner::Off;
         self
     }
 
@@ -206,7 +234,7 @@ impl ModrunBuilder {
     /// Returns the same validation errors as [`start`](Self::start).
     pub fn render_dot(self) -> Result<String> {
         let state = self.prepare_build_state()?;
-        Ok(crate::graph::render_dot(&state.container, &state.invokers))
+        Ok(render_dot(&state.container, &state.invokers))
     }
 
     /// Write the dependency graph to a DOT file before graph construction runs.
@@ -222,7 +250,7 @@ impl ModrunBuilder {
     }
 
     fn print_banner(&self) {
-        crate::banner::emit(&self.banner);
+        emit(&self.banner);
     }
 
     /// Build → start hooks → wait for shutdown → stop.
@@ -323,11 +351,11 @@ impl ModrunBuilder {
         };
 
         match started {
-            Ok(()) => crate::trace::started(),
+            Ok(()) => trace::started(),
             Err(err) => {
-                crate::trace::rolling_back(&err);
+                rolling_back(&err);
                 let cleanup = graceful_unwind(&app).await;
-                crate::trace::start_failed(&err);
+                start_failed(&err);
                 return finish_run(Err(err), cleanup);
             }
         }
@@ -391,9 +419,9 @@ impl ModrunBuilder {
         let dot_graph_path = self.dot_graph_path.take();
         let state = self.prepare_build_state_with(lifecycle, shutdown)?;
         if let Some(path) = dot_graph_path {
-            let dot = crate::graph::render_dot(&state.container, &state.invokers);
-            std::fs::write(&path, dot).map_err(|source| Error::io("write dot graph", source))?;
-            crate::trace::dot_graph_written(path.as_os_str().to_string_lossy().as_ref());
+            let dot = render_dot(&state.container, &state.invokers);
+            write(&path, dot).map_err(|source| Error::io("write dot graph", source))?;
+            dot_graph_written(path.as_os_str().to_string_lossy().as_ref());
         }
         Ok(state)
     }
@@ -436,7 +464,7 @@ impl ModrunBuilder {
 }
 
 async fn run_invokers(state: &mut BuildState) -> Result<()> {
-    let invokers = std::mem::take(&mut state.invokers);
+    let invokers = take(&mut state.invokers);
     let budget = state.build_timeout;
     let invoke = async {
         for scoped in invokers {
@@ -444,7 +472,7 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
             let function = invoker.name();
             let deps = invoker.dep_list();
             let module = state.container.scopes().name(scope);
-            crate::trace::invoking(function, deps.as_slice(), module);
+            invoking(function, deps.as_slice(), module);
             let mut invoke_guard = InflightInvoke::new(function, module);
             let previous = state.container.enter_scope(scope);
             let result = async {
@@ -452,15 +480,15 @@ async fn run_invokers(state: &mut BuildState) -> Result<()> {
                     state.container.ensure_built(deps.as_slice()).await?;
                 }
                 match invoker.call(&state.container) {
-                    crate::invoke::InvokeOut::Done(r) => r,
-                    crate::invoke::InvokeOut::Fut(fut) => fut.await,
+                    InvokeOut::Done(r) => r,
+                    InvokeOut::Fut(fut) => fut.await,
                 }
             }
             .await;
             state.container.leave_scope(previous);
             invoke_guard.finish();
             if let Err(ref err) = result {
-                crate::trace::invoke_failed(function, deps.as_slice(), module, err);
+                invoke_failed(function, deps.as_slice(), module, err);
             }
             result?;
         }
@@ -496,10 +524,10 @@ impl InflightInvoke {
 
 impl Drop for InflightInvoke {
     fn drop(&mut self) {
-        crate::trace::emit_unfinished(
+        emit_unfinished(
             self.finished,
-            || crate::trace::invoke_panicked(self.function, self.module),
-            || crate::trace::invoke_cancelled(self.function, self.module),
+            || invoke_panicked(self.function, self.module),
+            || invoke_cancelled(self.function, self.module),
         );
     }
 }
@@ -540,14 +568,14 @@ fn finish_interrupt(shutdown: &Shutdowner, cleanup: Result<()>) -> Result<()> {
 fn report_unwind_result(lifecycle: &Lifecycle, result: Result<()>) -> Result<()> {
     match result {
         Ok(()) => {
-            crate::trace::rolled_back();
+            rolled_back();
             Ok(())
         }
         Err(err) => {
-            crate::trace::rollback_failed(&err);
+            rollback_failed(&err);
             let leftover = lifecycle.pending_stops();
             if leftover > 0 {
-                crate::trace::hooks_abandoned(leftover);
+                hooks_abandoned(leftover);
             }
             Err(err)
         }
@@ -579,7 +607,7 @@ impl ModrunBuilder {
     /// when no module contributes a member.
     #[must_use]
     pub fn init_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
-        self.push_option(crate::provide_group::init_group::<T>());
+        self.push_option(init_group::<T>());
         self
     }
 
@@ -590,7 +618,7 @@ impl ModrunBuilder {
     /// should call this; modules cannot declare group policy.
     #[must_use]
     pub fn require_group<T: Clone + Send + Sync + 'static>(mut self) -> Self {
-        self.push_option(crate::provide_group::require_group::<T>());
+        self.push_option(require_group::<T>());
         self
     }
 }
@@ -618,14 +646,14 @@ async fn graceful_unwind(app: &BuiltApp) -> Result<()> {
 
 async fn with_timeout(
     budget: Option<Duration>,
-    fut: impl std::future::Future<Output = Result<()>>,
+    fut: impl Future<Output = Result<()>>,
     timed_out: Error,
 ) -> Result<()> {
     match budget {
         None => fut.await,
         Some(d) => {
-            let started = std::time::Instant::now();
-            match tokio::time::timeout(d, fut).await {
+            let started = Instant::now();
+            match timeout(d, fut).await {
                 // Prefer a real phase error over a timeout.
                 Ok(Err(err)) => Err(err),
                 // Sync blocking can prevent the timer from firing until the
@@ -652,13 +680,13 @@ impl BuiltApp {
     async fn start(&self) -> Result<()> {
         match self.start_hooks().await {
             Ok(()) => {
-                crate::trace::started();
+                trace::started();
                 Ok(())
             }
             Err(err) => {
-                crate::trace::rolling_back(&err);
+                rolling_back(&err);
                 let unwound = graceful_unwind(self).await;
-                crate::trace::start_failed(&err);
+                start_failed(&err);
                 combine_results(Err(err), unwound)
             }
         }
@@ -673,13 +701,13 @@ impl BuiltApp {
         .await;
         match &result {
             Err(err) => {
-                crate::trace::stop_failed(err);
+                stop_failed(err);
                 let leftover = self.lifecycle.pending_stops();
                 if leftover > 0 {
-                    crate::trace::hooks_abandoned(leftover);
+                    hooks_abandoned(leftover);
                 }
             }
-            Ok(()) => crate::trace::stopped(),
+            Ok(()) => stopped(),
         }
         result
     }
@@ -773,8 +801,8 @@ pub struct RunningApp {
     inner: Option<BuiltApp>,
 }
 
-impl std::fmt::Debug for RunningApp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RunningApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RunningApp").finish_non_exhaustive()
     }
 }
@@ -798,7 +826,7 @@ impl RunningApp {
 impl Drop for RunningApp {
     fn drop(&mut self) {
         if self.inner.is_some() {
-            crate::trace::running_app_dropped();
+            running_app_dropped();
             #[cfg(debug_assertions)]
             eprintln!("modrun: dropping RunningApp without stop(); OnStop hooks will not run");
         }

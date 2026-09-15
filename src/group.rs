@@ -10,6 +10,10 @@
 //! Container wiring requires `T: Clone` for group members and injected `Group<T>`;
 //! use `Arc<Group<T>>` or `Group<Arc<T>>` when cloning would be expensive.
 
+use std::ops::Deref;
+use std::slice::Iter;
+use std::vec::IntoIter;
+
 /// Many values of the same type, aggregated from [`provide_group`](crate::ModrunBuilder::provide_group)
 /// registrations across modules.
 ///
@@ -87,7 +91,7 @@ impl<T> Default for Group<T> {
 
 impl<T> IntoIterator for Group<T> {
     type Item = T;
-    type IntoIter = std::vec::IntoIter<T>;
+    type IntoIter = IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.into_iter()
@@ -96,7 +100,7 @@ impl<T> IntoIterator for Group<T> {
 
 impl<'a, T> IntoIterator for &'a Group<T> {
     type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.iter()
@@ -109,7 +113,7 @@ impl<T> AsRef<[T]> for Group<T> {
     }
 }
 
-impl<T> std::ops::Deref for Group<T> {
+impl<T> Deref for Group<T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {

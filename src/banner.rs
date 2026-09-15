@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io::IsTerminal;
+use std::io::stderr;
 
 /// Default ASCII banner printed at startup unless
 /// [`crate::ModrunBuilder::no_banner`] is called.
@@ -32,7 +33,7 @@ pub(crate) fn emit(banner: &Banner) {
 }
 
 fn print_default() {
-    if !std::io::stderr().is_terminal() {
+    if !stderr().is_terminal() {
         return;
     }
     print(DEFAULT_BANNER);

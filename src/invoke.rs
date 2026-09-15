@@ -11,6 +11,7 @@ use crate::error::user_invoke_err;
 use crate::future::BoxFuture;
 use crate::option::ModOption;
 use crate::scope::ScopeId;
+use std::fmt;
 
 pub(crate) enum InvokeOut {
     Done(Result<()>),
@@ -70,8 +71,8 @@ pub struct DynInvoker {
     inner: Box<dyn Invoker>,
 }
 
-impl std::fmt::Debug for DynInvoker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DynInvoker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynInvoker")
             .field("name", &self.inner.name())
             .field(

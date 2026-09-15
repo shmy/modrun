@@ -16,7 +16,9 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
+use modrun::logging::init;
 use modrun::{Error, Lifecycle, Modrun, Module, task_with};
+use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct Config {
@@ -56,7 +58,7 @@ fn register_http(lc: Lifecycle, cfg: Config, state: AppState) -> modrun::Result<
     lc.append(task_with(
         "http.serve",
         move || async move {
-            let listener = tokio::net::TcpListener::bind(addr)
+            let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|e| Error::io(format!("bind {addr}"), e))?;
             println!("listening on http://{addr}");
@@ -84,7 +86,7 @@ fn http_domain() -> Module {
 
 #[tokio::main]
 async fn main() -> modrun::Result<()> {
-    modrun::logging::init();
+    init();
 
     Modrun::builder()
         .supply(Config {

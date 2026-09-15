@@ -7,6 +7,7 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use modrun::{Group, Lifecycle, Modrun, ModrunBuilder, Module, hook};
 use tokio::runtime::Runtime;
+use tokio::time::sleep;
 
 const GROUP_MEMBER_COUNTS: [usize; 4] = [8, 32, 128, 512];
 const MEMBER_PAYLOAD_BYTES: usize = 512;
@@ -125,19 +126,19 @@ fn async_independent_ctors(c: &mut Criterion) {
             struct D;
 
             async fn a() -> A {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 A
             }
             async fn b() -> B {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 B
             }
             async fn c() -> C {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 C
             }
             async fn d() -> D {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
                 D
             }
 

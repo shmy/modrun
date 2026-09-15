@@ -5,6 +5,12 @@ use crate::future::BoxFuture;
 use crate::scope::ScopeId;
 
 use super::DynAny;
+use crate::container::ArcResolveFn;
+use crate::error;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
+use std::hash::Hasher;
 
 /// Hasher for keys built out of a [`TypeId`].
 ///
@@ -21,7 +27,7 @@ impl TypeIdHasher {
     }
 }
 
-impl std::hash::Hasher for TypeIdHasher {
+impl Hasher for TypeIdHasher {
     fn finish(&self) -> u64 {
         self.0
     }
@@ -58,16 +64,14 @@ impl std::hash::Hasher for TypeIdHasher {
     }
 }
 
-pub(crate) type TypeIdMap<K, V> =
-    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<TypeIdHasher>>;
-pub(crate) type TypeIdSet<K> =
-    std::collections::HashSet<K, std::hash::BuildHasherDefault<TypeIdHasher>>;
+pub(crate) type TypeIdMap<K, V> = HashMap<K, V, BuildHasherDefault<TypeIdHasher>>;
+pub(crate) type TypeIdSet<K> = HashSet<K, BuildHasherDefault<TypeIdHasher>>;
 
 /// Stored under [`TypeId::of::<Arc<T>>()`] so `get::<Arc<T>>()` can recover the
 /// handle without an extra `Arc<Arc<T>>` allocation.
 pub(crate) struct ArcBox<T: Send + Sync + ?Sized>(pub Arc<T>);
 
-pub(crate) type ArcRegisterFn = fn(&mut TypeIdMap<TypeId, crate::container::ArcResolveFn>);
+pub(crate) type ArcRegisterFn = fn(&mut TypeIdMap<TypeId, ArcResolveFn>);
 
 /// Value produced by a constructor, plus an optional `Arc<T>` alias.
 pub(crate) struct Constructed {
@@ -76,7 +80,7 @@ pub(crate) struct Constructed {
     pub register_arc: Option<ArcRegisterFn>,
 }
 
-pub(crate) type ConstructFuture = BoxFuture<'static, crate::error::Result<Constructed>>;
+pub(crate) type ConstructFuture = BoxFuture<'static, error::Result<Constructed>>;
 
 pub(crate) enum ConstructOut {
     Ready(Constructed),

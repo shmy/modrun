@@ -11,6 +11,7 @@
 use std::fmt;
 use std::io::IsTerminal;
 
+use std::io::stderr;
 use tracing::Event;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::EnvFilter;
@@ -54,9 +55,9 @@ pub fn init_with_filter(filter: EnvFilter) {
 #[must_use]
 pub fn try_init_with_filter(filter: EnvFilter) -> bool {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(stderr)
         .with_env_filter(filter)
-        .with_ansi(std::io::stderr().is_terminal())
+        .with_ansi(stderr().is_terminal())
         .event_format(MessageOnly)
         .try_init()
         .is_ok()

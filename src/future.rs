@@ -1,4 +1,6 @@
 use std::future::Future;
+use std::marker::PhantomData;
+use std::mem::take;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -14,7 +16,7 @@ where
     TryJoinAll {
         inflight: items,
         done: Vec::new(),
-        _ty: std::marker::PhantomData,
+        _ty: PhantomData,
     }
 }
 
@@ -22,7 +24,7 @@ where
 pub(crate) struct TryJoinAll<K, Fut, T, E> {
     inflight: Vec<(K, Fut)>,
     done: Vec<(K, T)>,
-    _ty: std::marker::PhantomData<E>,
+    _ty: PhantomData<E>,
 }
 
 impl<K, Fut, T, E> Future for TryJoinAll<K, Fut, T, E>
@@ -51,7 +53,7 @@ where
             }
         }
         if this.inflight.is_empty() {
-            Poll::Ready(Ok(std::mem::take(&mut this.done)))
+            Poll::Ready(Ok(take(&mut this.done)))
         } else {
             Poll::Pending
         }

@@ -5,6 +5,21 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crate::error::aggregate_errors;
 use crate::future::BoxFuture;
 use crate::shutdown::Shutdowner;
+use crate::trace::elapsed;
+use crate::trace::emit_unfinished;
+use crate::trace::on_start_cancelled;
+use crate::trace::on_start_executed;
+use crate::trace::on_start_executing;
+use crate::trace::on_start_failed;
+use crate::trace::on_start_panicked;
+use crate::trace::on_stop_cancelled;
+use crate::trace::on_stop_executed;
+use crate::trace::on_stop_executing;
+use crate::trace::on_stop_failed;
+use crate::trace::on_stop_panicked;
+use crate::trace::start_timer;
+use std::fmt;
+use std::time::Duration;
 
 type Callback = Box<dyn FnOnce() -> BoxFuture<'static, Result<()>> + Send>;
 type StopCallback = Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync>;
@@ -145,8 +160,8 @@ pub fn hook() -> HookFn {
     HookFn::new()
 }
 
-impl std::fmt::Debug for HookFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for HookFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HookFn")
             .field("name", &self.name)
             .field("on_start", &self.on_start.is_some())
@@ -293,7 +308,7 @@ struct InflightHook {
 
 impl InflightHook {
     fn start(lifecycle: Lifecycle, idx: usize, name: &'static str) -> Self {
-        crate::trace::on_start_executing(idx, name);
+        on_start_executing(idx, name);
         Self {
             lifecycle: Some(lifecycle),
             idx,
@@ -302,23 +317,23 @@ impl InflightHook {
         }
     }
 
-    fn ok(&mut self, runtime: std::time::Duration) {
+    fn ok(&mut self, runtime: Duration) {
         self.finished = true;
-        crate::trace::on_start_executed(self.idx, self.name, runtime);
+        on_start_executed(self.idx, self.name, runtime);
     }
 
     fn fail(&mut self, err: &Error) {
         self.finished = true;
-        crate::trace::on_start_failed(self.idx, self.name, err);
+        on_start_failed(self.idx, self.name, err);
     }
 }
 
 impl Drop for InflightHook {
     fn drop(&mut self) {
-        crate::trace::emit_unfinished(
+        emit_unfinished(
             self.finished,
-            || crate::trace::on_start_panicked(self.idx, self.name),
-            || crate::trace::on_start_cancelled(self.idx, self.name),
+            || on_start_panicked(self.idx, self.name),
+            || on_start_cancelled(self.idx, self.name),
         );
         if !self.finished {
             if let Some(lc) = self.lifecycle.take() {
@@ -345,7 +360,7 @@ impl StopGuard {
         name: &'static str,
         hook: Box<dyn ErasedHook>,
     ) -> Self {
-        crate::trace::on_stop_executing(idx, name);
+        on_stop_executing(idx, name);
         Self {
             lifecycle,
             idx,
@@ -356,7 +371,7 @@ impl StopGuard {
     }
 
     async fn run(mut self) -> Result<()> {
-        let started_at = crate::trace::start_timer();
+        let started_at = start_timer();
         let result = {
             let hook = self.hook.as_mut().expect("hook present");
             match hook.on_stop().await {
@@ -365,12 +380,8 @@ impl StopGuard {
             }
         };
         match &result {
-            Ok(()) => crate::trace::on_stop_executed(
-                self.idx,
-                self.name,
-                crate::trace::elapsed(started_at),
-            ),
-            Err(err) => crate::trace::on_stop_failed(self.idx, self.name, err),
+            Ok(()) => on_stop_executed(self.idx, self.name, elapsed(started_at)),
+            Err(err) => on_stop_failed(self.idx, self.name, err),
         }
         self.finished = true;
         self.hook = None;
@@ -386,10 +397,10 @@ impl Drop for StopGuard {
                 state.hooks[self.idx].inner = Some(hook);
                 state.started += 1;
             }
-            crate::trace::emit_unfinished(
+            emit_unfinished(
                 false,
-                || crate::trace::on_stop_panicked(self.idx, self.name),
-                || crate::trace::on_stop_cancelled(self.idx, self.name),
+                || on_stop_panicked(self.idx, self.name),
+                || on_stop_cancelled(self.idx, self.name),
             );
         }
     }
@@ -425,8 +436,8 @@ pub struct Lifecycle {
     shutdown: Shutdowner,
 }
 
-impl std::fmt::Debug for Lifecycle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Lifecycle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state();
         f.debug_struct("Lifecycle")
             .field("phase", &state.phase)
@@ -537,10 +548,10 @@ impl Lifecycle {
             };
 
             let mut inflight = InflightHook::start(self.clone(), idx, name);
-            let started_at = crate::trace::start_timer();
+            let started_at = start_timer();
             match hook.on_start().await {
                 Ok(()) => {
-                    inflight.ok(crate::trace::elapsed(started_at));
+                    inflight.ok(elapsed(started_at));
                     let mut state = self.state();
                     state.hooks[idx].inner = Some(hook);
                     state.started += 1;
@@ -656,6 +667,7 @@ mod tests {
     use crate::shutdown::Shutdowner;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn stop_guard_writes_back_cancelled_on_stop() {
@@ -667,7 +679,7 @@ mod tests {
             let l = Arc::clone(&l2);
             async move {
                 l.lock().unwrap().push("begin");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 l.lock().unwrap().push("end");
                 Ok(())
             }

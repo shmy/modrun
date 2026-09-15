@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use modrun::__wiring::ProviderFn;
 use modrun::{Group, Modrun, Module};
+use std::io::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Route(&'static str);
@@ -288,7 +289,7 @@ async fn group_into_iter_works() {
 
 #[tokio::test]
 async fn provide_group_result_async_member() {
-    async fn connect() -> Result<Route, std::io::Error> {
+    async fn connect() -> Result<Route, Error> {
         Ok(Route("async"))
     }
 
@@ -505,7 +506,7 @@ async fn nested_modules_aggregate_in_dfs_order() {
 
 #[tokio::test]
 async fn provide_group_result_member() {
-    fn try_route() -> Result<Route, std::io::Error> {
+    fn try_route() -> Result<Route, Error> {
         Ok(Route("ok"))
     }
 
@@ -665,8 +666,8 @@ async fn provide_group_dyn_registers_member() {
 
 #[tokio::test]
 async fn provide_group_result_failure_propagates() {
-    fn fail() -> Result<Route, std::io::Error> {
-        Err(std::io::Error::other("group member failed"))
+    fn fail() -> Result<Route, Error> {
+        Err(Error::other("group member failed"))
     }
 
     fn boot(_routes: Group<Route>) {}
@@ -685,8 +686,8 @@ async fn provide_group_result_failure_propagates() {
 
 #[tokio::test]
 async fn provide_group_result_async_failure_propagates() {
-    async fn fail() -> Result<Route, std::io::Error> {
-        Err(std::io::Error::other("async group member failed"))
+    async fn fail() -> Result<Route, Error> {
+        Err(Error::other("async group member failed"))
     }
 
     fn boot(_routes: Group<Route>) {}

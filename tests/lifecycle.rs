@@ -7,6 +7,11 @@ use std::sync::{
 use std::time::Duration;
 
 use modrun::{Error, Hook, Lifecycle, Modrun, Module, Shutdowner, hook};
+use std::io;
+use std::thread;
+use std::time::Instant;
+use tokio::sync::Notify;
+use tokio::time;
 
 /// Build a repeatable OnStop closure for [`hook`] (required after StopGuard retry).
 macro_rules! on_stop_shared {
@@ -66,7 +71,7 @@ async fn shared_counter_lifecycle() {
 #[tokio::test]
 async fn start_failure_runs_stop_for_started_hooks() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log) {
         let l1 = Arc::clone(&log.0);
@@ -94,7 +99,7 @@ async fn start_failure_runs_stop_for_started_hooks() {
             .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let err = Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -157,9 +162,9 @@ async fn named_stop_hook_error_includes_name() {
 async fn named_start_hook_io_stays_io() {
     fn boot(lc: Lifecycle) {
         lc.append(
-            hook().name("http").on_start(|| async {
-                Err(Error::io("bind", std::io::Error::other("addr in use")))
-            }),
+            hook()
+                .name("http")
+                .on_start(|| async { Err(Error::io("bind", io::Error::other("addr in use"))) }),
         )
         .unwrap();
     }
@@ -179,7 +184,7 @@ async fn named_start_hook_io_stays_io() {
 #[tokio::test]
 async fn hook_order_start_fifo_stop_lifo() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log) {
         for (start, stop) in [("s1", "t1"), ("s2", "t2"), ("s3", "t3")] {
@@ -206,7 +211,7 @@ async fn hook_order_start_fifo_stop_lifo() {
         }
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let app = Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -241,7 +246,7 @@ async fn shutdowner_stops_run() {
 async fn start_timeout_errors() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -260,7 +265,7 @@ async fn start_timeout_errors() {
 #[tokio::test]
 async fn run_stops_hooks_after_programmatic_shutdown() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log, shutdown: Shutdowner) {
         let started = Arc::clone(&log.0);
@@ -280,7 +285,7 @@ async fn run_stops_hooks_after_programmatic_shutdown() {
         .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -321,7 +326,7 @@ async fn stop_hooks_run_at_most_once() {
 #[tokio::test]
 async fn start_timeout_unwinds_already_started_hooks() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log) {
         let l1 = Arc::clone(&log.0);
@@ -339,13 +344,13 @@ async fn start_timeout_unwinds_already_started_hooks() {
         )
         .unwrap();
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let err = Modrun::builder()
         .start_timeout(Duration::from_millis(50))
         .supply(Log(Arc::clone(&shared)))
@@ -447,7 +452,7 @@ async fn hook_without_on_stop_does_not_truncate_unwind() {
 async fn stop_timeout_errors() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_stop(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -469,7 +474,7 @@ async fn stop_timeout_errors() {
 #[tokio::test]
 async fn start_timeout_unwind_respects_stop_timeout() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log) {
         let started = Arc::clone(&log.0);
@@ -480,20 +485,20 @@ async fn start_timeout_unwind_respects_stop_timeout() {
                     Ok(())
                 })
                 .on_stop(|| async {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    time::sleep(Duration::from_secs(10)).await;
                     Ok(())
                 }),
         )
         .unwrap();
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let began = std::time::Instant::now();
+    let shared = Arc::new(Mutex::new(Vec::new()));
+    let began = Instant::now();
     let err = Modrun::builder()
         .start_timeout(Duration::from_millis(50))
         .stop_timeout(Duration::from_millis(50))
@@ -518,12 +523,12 @@ async fn start_timeout_unwind_respects_stop_timeout() {
 #[tokio::test]
 async fn shutdown_during_start_unwinds_gracefully() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log, shutdown: Shutdowner) {
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
 
@@ -542,13 +547,13 @@ async fn shutdown_during_start_unwinds_gracefully() {
         )
         .unwrap();
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     Modrun::builder()
         .start_timeout(Duration::from_secs(5))
         .supply(Log(Arc::clone(&shared)))
@@ -567,12 +572,12 @@ async fn shutdown_during_start_runs_stop_only_after_unstarted_hook() {
     fn boot(lc: Lifecycle, log: Log, shutdown: Shutdowner) {
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
 
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -607,10 +612,10 @@ async fn shutdown_during_build_is_ok() {
     async fn connect(shutdown: Shutdowner) -> Pool {
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
         Pool
     }
 
@@ -625,7 +630,7 @@ async fn shutdown_during_build_is_ok() {
 #[tokio::test]
 async fn shutdown_during_build_runs_stop_only_hooks() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     #[derive(Clone)]
     struct Pool;
@@ -640,17 +645,17 @@ async fn shutdown_during_build_runs_stop_only_hooks() {
 
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
     }
 
     async fn connect(_shutdown: Shutdowner) -> Pool {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
         Pool
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -665,7 +670,7 @@ async fn shutdown_during_build_runs_stop_only_hooks() {
 #[tokio::test]
 async fn shutdown_during_build_runs_stop_only_after_unstarted_start_hook() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     #[derive(Clone)]
     struct Pool;
@@ -694,17 +699,17 @@ async fn shutdown_during_build_runs_stop_only_after_unstarted_start_hook() {
 
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
     }
 
     async fn connect(_shutdown: Shutdowner) -> Pool {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
         Pool
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -744,7 +749,7 @@ async fn run_prefers_build_error_over_concurrent_shutdown() {
 #[tokio::test]
 async fn run_prefers_start_error_over_concurrent_shutdown() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
         let started = Arc::clone(&log.0);
@@ -769,7 +774,7 @@ async fn run_prefers_start_error_over_concurrent_shutdown() {
     }
 
     for _ in 0..32 {
-        let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let shared = Arc::new(Mutex::new(Vec::new()));
         let err = Modrun::builder()
             .supply(Log(Arc::clone(&shared)))
             .invoke(boot)
@@ -788,7 +793,7 @@ async fn run_prefers_start_error_over_concurrent_shutdown() {
 #[tokio::test]
 async fn failed_start_stays_err_if_shutdown_during_unwind() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, shutdown: Shutdowner, log: Log) {
         let stopped = Arc::clone(&log.0);
@@ -811,7 +816,7 @@ async fn failed_start_stays_err_if_shutdown_during_unwind() {
             .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let err = Modrun::builder()
         .supply(Log(Arc::clone(&shared)))
         .invoke(boot)
@@ -829,7 +834,7 @@ async fn failed_start_stays_err_if_shutdown_during_unwind() {
 #[tokio::test]
 async fn build_timeout_after_invoke_unwinds_stop_only() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     #[derive(Clone)]
     struct Slow;
@@ -844,11 +849,11 @@ async fn build_timeout_after_invoke_unwinds_stop_only() {
     }
 
     async fn slow() -> Slow {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
         Slow
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let err = Modrun::builder()
         .build_timeout(Duration::from_millis(50))
         .supply(Log(Arc::clone(&shared)))
@@ -866,7 +871,7 @@ async fn build_timeout_after_invoke_unwinds_stop_only() {
 #[tokio::test]
 async fn stop_timeout_abandons_inflight_and_remaining() {
     #[derive(Clone)]
-    struct Log(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    struct Log(Arc<Mutex<Vec<&'static str>>>);
 
     fn boot(lc: Lifecycle, log: Log) {
         let l2 = Arc::clone(&log.0);
@@ -878,13 +883,13 @@ async fn stop_timeout_abandons_inflight_and_remaining() {
         .unwrap();
         lc.append(hook().on_stop(on_stop_shared!(l1, |l1| {
             l1.lock().unwrap().push("hang");
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         })))
         .unwrap();
     }
 
-    let shared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = Arc::new(Mutex::new(Vec::new()));
     let err = Modrun::builder()
         .stop_timeout(Duration::from_millis(50))
         .supply(Log(Arc::clone(&shared)))
@@ -908,12 +913,12 @@ async fn stop_timeout_abandons_inflight_and_remaining() {
 async fn combine_prefers_unwind_timeout_over_start_timeout() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_stop(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -984,10 +989,10 @@ async fn start_and_unwind_errors_are_both_retained() {
 
 #[tokio::test]
 async fn append_after_start_errors() {
-    let lc_holder = std::sync::Arc::new(std::sync::Mutex::new(None::<Lifecycle>));
-    let slot = std::sync::Arc::clone(&lc_holder);
+    let lc_holder = Arc::new(Mutex::new(None::<Lifecycle>));
+    let slot = Arc::clone(&lc_holder);
 
-    fn boot(lc: Lifecycle, slot: std::sync::Arc<std::sync::Mutex<Option<Lifecycle>>>) {
+    fn boot(lc: Lifecycle, slot: Arc<Mutex<Option<Lifecycle>>>) {
         *slot.lock().unwrap() = Some(lc);
     }
 
@@ -1012,14 +1017,14 @@ async fn append_after_start_errors() {
 async fn append_while_stopping_errors() {
     #[derive(Clone)]
     struct StopGate {
-        entered: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
     }
 
     let lc_holder = Arc::new(Mutex::new(None::<Lifecycle>));
     let slot = Arc::clone(&lc_holder);
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
 
     fn boot(lc: Lifecycle, slot: Arc<Mutex<Option<Lifecycle>>>, gate: StopGate) {
         *slot.lock().unwrap() = Some(lc.clone());
@@ -1064,7 +1069,7 @@ async fn append_while_stopping_errors() {
 async fn last_timeout_wins() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            time::sleep(Duration::from_millis(80)).await;
             Ok(())
         }))
         .unwrap();
@@ -1110,7 +1115,7 @@ async fn shutdowner_wait_and_is_requested() {
 async fn no_start_timeout_disables_budget() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            time::sleep(Duration::from_millis(80)).await;
             Ok(())
         }))
         .unwrap();
@@ -1132,7 +1137,7 @@ async fn no_start_timeout_disables_budget() {
 async fn no_stop_timeout_disables_budget() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_stop(|| async {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            time::sleep(Duration::from_millis(80)).await;
             Ok(())
         }))
         .unwrap();
@@ -1172,10 +1177,10 @@ async fn run_shutdown_during_start_is_ok() {
     fn boot(lc: Lifecycle, shutdown: Shutdowner) {
         lc.append(hook().on_start(move || async move {
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
                 shutdown.shutdown();
             });
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -1195,7 +1200,7 @@ async fn build_timeout_errors() {
     struct Slow;
 
     async fn slow() -> Slow {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
         Slow
     }
 
@@ -1219,7 +1224,7 @@ async fn build_timeout_reports_sync_blocking_invoker() {
     let err = Modrun::builder()
         .no_banner()
         .build_timeout(Duration::from_millis(50))
-        .invoke(|| std::thread::sleep(Duration::from_millis(200)))
+        .invoke(|| thread::sleep(Duration::from_millis(200)))
         .start()
         .await
         .unwrap_err();
@@ -1233,7 +1238,7 @@ async fn build_timeout_reports_sync_blocking_invoker() {
 async fn start_timeout_reports_sync_blocking_hook() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_start(|| async {
-            std::thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(200));
             Ok(())
         }))
         .unwrap();
@@ -1256,7 +1261,7 @@ async fn start_timeout_reports_sync_blocking_hook() {
 async fn stop_timeout_reports_sync_blocking_hook() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_stop(|| async {
-            std::thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(200));
             Ok(())
         }))
         .unwrap();
@@ -1284,7 +1289,7 @@ async fn no_build_timeout_disables_budget() {
     struct Slow;
 
     async fn slow() -> Slow {
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        time::sleep(Duration::from_millis(80)).await;
         Slow
     }
 

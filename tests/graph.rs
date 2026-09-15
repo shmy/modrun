@@ -6,6 +6,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use modrun::{Group, Modrun, Module};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::process::id;
+use tokio::runtime::Runtime;
 
 thread_local! {
     static CTOR_RAN: AtomicBool = const { AtomicBool::new(false) };
@@ -334,16 +340,15 @@ async fn dot_graph_writes_file_before_constructors_run() {
 
     fn boom_ctor() -> Boom {
         let path = DOT_PATH.with(|slot| slot.borrow().clone().expect("path set"));
-        let dot =
-            std::fs::read_to_string(&path).expect("dot must be written before constructor runs");
+        let dot = read_to_string(&path).expect("dot must be written before constructor runs");
         assert!(dot.contains("digraph modrun"));
         assert!(dot.contains("Boom"));
         CTOR_RAN.with(|ran| ran.store(true, Ordering::SeqCst));
         Boom
     }
 
-    let dir = std::env::temp_dir().join(format!("modrun-dot-before-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("modrun-dot-before-{}", id()));
+    create_dir_all(&dir).unwrap();
     let path = dir.join("graph.dot");
     DOT_PATH.with(|slot| *slot.borrow_mut() = Some(path.clone()));
 
@@ -359,7 +364,7 @@ async fn dot_graph_writes_file_before_constructors_run() {
         .unwrap();
 
     assert!(CTOR_RAN.with(|ran| ran.load(Ordering::SeqCst)));
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = remove_dir_all(dir);
     app.stop().await.unwrap();
 }
 
@@ -449,8 +454,8 @@ async fn dot_graph_writes_file() {
         Boom
     }
 
-    let dir = std::env::temp_dir().join(format!("modrun-dot-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("modrun-dot-{}", id()));
+    create_dir_all(&dir).unwrap();
     let path = dir.join("graph.dot");
 
     let app = Modrun::builder()
@@ -463,19 +468,19 @@ async fn dot_graph_writes_file() {
         .unwrap();
 
     assert!(path.is_file(), "dot file missing at {}", path.display());
-    let dot = std::fs::read_to_string(&path).unwrap();
+    let dot = read_to_string(&path).unwrap();
     assert!(dot.contains("digraph modrun"));
     assert!(dot.contains("Boom"));
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = remove_dir_all(dir);
     app.stop().await.unwrap();
 }
 
 #[test]
 fn dot_graph_write_failure_surfaces_io_error() {
-    let dir = std::env::temp_dir().join(format!("modrun-dot-fail-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("modrun-dot-fail-{}", id()));
+    create_dir_all(&dir).unwrap();
 
-    let err = tokio::runtime::Runtime::new()
+    let err = Runtime::new()
         .unwrap()
         .block_on(async {
             Modrun::builder()
@@ -490,5 +495,5 @@ fn dot_graph_write_failure_surfaces_io_error() {
 
     let msg = err.to_string();
     assert!(msg.contains("write dot graph"), "unexpected: {msg}");
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = remove_dir_all(dir);
 }

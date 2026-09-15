@@ -4,7 +4,16 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use modrun::Error;
 use modrun::{Lifecycle, Modrun, Module, Shutdowner, hook};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::future::Future;
+use std::process::id;
+use tokio::time::sleep;
+use tracing::Level;
+use tracing::subscriber::set_default;
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -29,12 +38,12 @@ impl Capture {
 async fn with_logs<F, Fut>(f: F) -> String
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: Future<Output = ()>,
 {
     let capture = Capture::default();
     let writer = capture.clone();
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(Level::INFO)
         .without_time()
         .with_target(false)
         .with_level(false)
@@ -42,7 +51,7 @@ where
         .with_writer(move || writer.clone())
         .finish();
 
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let _guard = set_default(subscriber);
     f().await;
     capture.text()
 }
@@ -100,7 +109,7 @@ async fn sync_constructor_tracing_wraps_execution_and_reports_errors() {
     struct Service;
 
     fn fail_service() -> modrun::Result<Service> {
-        Err(modrun::Error::hook("ctor-boom"))
+        Err(Error::hook("ctor-boom"))
     }
 
     let logs = with_logs(|| async {
@@ -123,7 +132,7 @@ async fn sync_constructor_tracing_wraps_execution_and_reports_errors() {
 #[tokio::test]
 async fn build_timeout_emits_invoke_cancelled() {
     async fn hang() {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(10)).await;
     }
 
     let logs = with_logs(|| async {
@@ -145,7 +154,7 @@ async fn build_timeout_emits_constructor_cancelled() {
     struct Pool;
 
     async fn hang() -> Pool {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(10)).await;
         Pool
     }
 
@@ -177,7 +186,7 @@ fn has_message(logs: &str, message: &str) -> bool {
 #[tokio::test]
 async fn emits_rollback_events_on_start_failure() {
     fn boot(lc: Lifecycle) {
-        lc.append(hook().on_start(|| async { Err(modrun::Error::hook("boom")) }))
+        lc.append(hook().on_start(|| async { Err(Error::hook("boom")) }))
             .unwrap();
     }
 
@@ -196,7 +205,7 @@ async fn emits_rollback_events_on_start_failure() {
 async fn start_timeout_emits_cancelled() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().name("hang").on_start(|| async {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -204,7 +213,7 @@ async fn start_timeout_emits_cancelled() {
 
     let logs = with_logs(|| async {
         let _ = Modrun::builder()
-            .start_timeout(std::time::Duration::from_millis(50))
+            .start_timeout(Duration::from_millis(50))
             .invoke(boot)
             .start()
             .await
@@ -281,10 +290,10 @@ async fn build_cancel_emits_shutdown_requested() {
     async fn connect(shutdown: Shutdowner) -> Pool {
         let s = shutdown.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            sleep(Duration::from_millis(20)).await;
             s.shutdown();
         });
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(10)).await;
         Pool
     }
 
@@ -328,7 +337,7 @@ async fn steady_shutdown_emits_one_requested_event_without_signal() {
 async fn stop_timeout_emits_hooks_abandoned() {
     fn boot(lc: Lifecycle) {
         lc.append(hook().on_stop(|| async {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }))
         .unwrap();
@@ -337,7 +346,7 @@ async fn stop_timeout_emits_hooks_abandoned() {
 
     let logs = with_logs(|| async {
         let _ = Modrun::builder()
-            .stop_timeout(std::time::Duration::from_millis(50))
+            .stop_timeout(Duration::from_millis(50))
             .invoke(boot)
             .start()
             .await
@@ -466,8 +475,8 @@ async fn stop_panic_emits_panicked_not_cancelled() {
 
 #[tokio::test]
 async fn dot_graph_emits_trace_event() {
-    let dir = std::env::temp_dir().join(format!("modrun-dot-trace-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("modrun-dot-trace-{}", id()));
+    create_dir_all(&dir).unwrap();
     let path = dir.join("graph.dot");
 
     let logs = with_logs(|| async {
@@ -489,5 +498,5 @@ async fn dot_graph_emits_trace_event() {
         logs.contains("GRAPH") && logs.contains("graph.dot"),
         "logs: {logs}"
     );
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = remove_dir_all(dir);
 }

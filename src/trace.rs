@@ -9,21 +9,23 @@ use std::time::Duration;
 
 use crate::lifecycle::Lifecycle;
 use crate::shutdown::Shutdowner;
+use std::thread::panicking;
+use std::time::Instant;
 
 /// Log target for every modrun framework event.
 pub(crate) const TARGET: &str = "modrun";
 
 const PREFIX: &str = "[modrun]";
 
-pub(crate) fn start_timer() -> Option<std::time::Instant> {
-    info_enabled().then(std::time::Instant::now)
+pub(crate) fn start_timer() -> Option<Instant> {
+    info_enabled().then(Instant::now)
 }
 
 pub(crate) fn info_enabled() -> bool {
     tracing::enabled!(target: TARGET, tracing::Level::INFO)
 }
 
-pub(crate) fn elapsed(started: Option<std::time::Instant>) -> Duration {
+pub(crate) fn elapsed(started: Option<Instant>) -> Duration {
     started.map(|t| t.elapsed()).unwrap_or(Duration::ZERO)
 }
 
@@ -124,7 +126,7 @@ pub(crate) fn emit_unfinished(finished: bool, panicked: impl FnOnce(), cancelled
     if finished {
         return;
     }
-    if std::thread::panicking() {
+    if panicking() {
         panicked();
     } else {
         cancelled();

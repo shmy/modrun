@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::app::BuildState;
+use crate::error::Error;
 use crate::error::Result;
 use crate::group::Group;
 use crate::option::ModOption;
@@ -8,6 +9,9 @@ use crate::provide::{
     AsyncProviderFn, DynProvider, FallibleAsyncProviderFn, FallibleProviderFn, ProviderFn,
     ProviderMarker,
 };
+use crate::trace::provided_group;
+use std::any::TypeId;
+use std::any::type_name;
 
 macro_rules! provide_group_fn {
     ($name:ident, $trait:ident) => {
@@ -30,9 +34,9 @@ provide_group_fn!(provide_group_result_async, FallibleAsyncProviderFn);
 pub(crate) fn provide_group_dyn<T: Clone + Send + Sync + 'static>(
     provider: DynProvider,
 ) -> Box<dyn ModOption> {
-    if provider.result_type() != std::any::TypeId::of::<T>() {
+    if provider.result_type() != TypeId::of::<T>() {
         return Box::new(GroupMemberTypeMismatchOption {
-            expected: std::any::type_name::<T>(),
+            expected: type_name::<T>(),
             actual: provider.result_name(),
         });
     }
@@ -46,7 +50,7 @@ struct GroupMemberTypeMismatchOption {
 
 impl ModOption for GroupMemberTypeMismatchOption {
     fn apply(self: Box<Self>, _app: &mut BuildState) -> Result<()> {
-        Err(crate::error::Error::GroupMemberTypeMismatch {
+        Err(Error::GroupMemberTypeMismatch {
             expected: self.expected,
             actual: self.actual,
         })
@@ -75,7 +79,7 @@ impl<T: Clone + Send + Sync + 'static> ModOption for ProvideGroupOption<T> {
         let scope = app.current_scope;
         app.container
             .insert_group_member_typed::<T>(self.provider, scope)?;
-        crate::trace::provided_group(
+        provided_group(
             type_name,
             constructor,
             app.container.scopes().name(scope),
@@ -106,10 +110,8 @@ struct RequireGroupOption<T>(PhantomData<T>);
 impl<T: Clone + Send + Sync + 'static> ModOption for RequireGroupOption<T> {
     fn apply(self: Box<Self>, app: &mut BuildState) -> Result<()> {
         app.container.ensure_empty_group::<T>()?;
-        app.container.require_group_element(
-            std::any::TypeId::of::<T>(),
-            std::any::type_name::<Group<T>>(),
-        );
+        app.container
+            .require_group_element(TypeId::of::<T>(), type_name::<Group<T>>());
         Ok(())
     }
 }

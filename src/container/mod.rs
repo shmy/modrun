@@ -1,9 +1,11 @@
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::provide::DynProvider;
 use crate::scope::{ScopeId, ScopeTree};
+use std::mem::replace;
 
 mod build;
 mod graph;
@@ -80,7 +82,7 @@ impl Container {
     }
 
     pub(crate) fn enter_scope(&mut self, scope: ScopeId) -> ScopeId {
-        std::mem::replace(&mut self.active_scope, scope)
+        replace(&mut self.active_scope, scope)
     }
 
     pub(crate) fn leave_scope(&mut self, previous: ScopeId) {
@@ -124,7 +126,7 @@ impl Container {
         let provider = self
             .providers
             .remove(&key)
-            .ok_or_else(|| crate::error::Error::NotConstructed(self.key_name(key)))?;
+            .ok_or_else(|| Error::NotConstructed(self.key_name(key)))?;
         let out = provider.construct(self);
         self.providers.insert(key, provider);
         out

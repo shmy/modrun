@@ -4,6 +4,8 @@ use crate::app::BuildState;
 use crate::error::Result;
 use crate::option::ModOption;
 use crate::provide::take_once_value_provider;
+use crate::trace::supplied_group;
+use std::any::type_name;
 
 pub(crate) fn supply_group<T: Clone + Send + Sync + 'static>(value: T) -> Box<dyn ModOption> {
     Box::new(SupplyGroupOption {
@@ -23,11 +25,7 @@ impl<T: Clone + Send + Sync + 'static> ModOption for SupplyGroupOption<T> {
         let provider = take_once_value_provider(self.value, "<supply_group>");
         app.container
             .insert_group_member_typed::<T>(provider, scope)?;
-        crate::trace::supplied_group(
-            std::any::type_name::<T>(),
-            app.container.scopes().name(scope),
-            false,
-        );
+        supplied_group(type_name::<T>(), app.container.scopes().name(scope), false);
         Ok(())
     }
 }

@@ -8,6 +8,7 @@
 //! cargo run --example swap
 //! ```
 
+use modrun::logging::init;
 use modrun::{Lifecycle, Modrun, Module, hook};
 
 #[derive(Clone)]
@@ -46,7 +47,7 @@ fn user_domain() -> Module {
 
 #[tokio::main]
 async fn main() -> modrun::Result<()> {
-    modrun::logging::init();
+    init();
 
     println!("-- production --");
     Modrun::builder()

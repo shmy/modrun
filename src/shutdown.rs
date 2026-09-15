@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::fmt;
+use std::pin::pin;
 use tokio::sync::Notify;
 
 /// Triggers graceful shutdown from inside the app.
@@ -84,7 +86,7 @@ impl Shutdowner {
         loop {
             // Register as a waiter *before* reading the flag, and enable so
             // `notify_waiters` is not lost between the check and the first poll.
-            let mut notified = std::pin::pin!(self.inner.notify.notified());
+            let mut notified = pin!(self.inner.notify.notified());
             notified.as_mut().enable();
 
             if self.inner.requested.load(Ordering::Acquire) {
@@ -95,8 +97,8 @@ impl Shutdowner {
     }
 }
 
-impl std::fmt::Debug for Shutdowner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Shutdowner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Shutdowner")
             .field("requested", &self.inner.requested.load(Ordering::Acquire))
             .field(

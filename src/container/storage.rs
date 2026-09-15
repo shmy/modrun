@@ -6,6 +6,9 @@ use crate::scope::ScopeId;
 
 use super::types::{ArcBox, Constructed, ValueNode};
 use super::{ArcResolveFn, Container, DynAny, TypeIdMap};
+use crate::lifecycle::Lifecycle;
+use crate::shutdown::Shutdowner;
+use std::any::Any;
 
 pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
     let arc = Arc::new(value);
@@ -22,9 +25,7 @@ pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
 pub(crate) fn register_arc_resolver<T: Send + Sync + 'static>(
     resolvers: &mut TypeIdMap<TypeId, ArcResolveFn>,
 ) {
-    fn resolve<T: Send + Sync + 'static>(
-        value: &DynAny,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync>> {
+    fn resolve<T: Send + Sync + 'static>(value: &DynAny) -> Result<Box<dyn Any + Send + Sync>> {
         let arc = value
             .downcast_ref::<ArcBox<T>>()
             .ok_or_else(|| Error::Downcast(type_name::<Arc<T>>()))?
@@ -164,8 +165,8 @@ pub(crate) fn take_packed_member<T: Clone + Send + Sync + 'static>(value: DynAny
 
 pub(crate) fn seed_builtins(
     container: &mut Container,
-    lifecycle: crate::lifecycle::Lifecycle,
-    shutdowner: crate::shutdown::Shutdowner,
+    lifecycle: Lifecycle,
+    shutdowner: Shutdowner,
 ) -> Result<()> {
     container.insert_value(lifecycle, ScopeId::ROOT, false)?;
     container.insert_value(shutdowner, ScopeId::ROOT, false)?;

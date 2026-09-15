@@ -8,8 +8,12 @@ use crate::error::Result;
 use crate::app::BuildState;
 use crate::container::{ConstructOut, Container, pack};
 use crate::deps::DepList;
+use crate::error::BoxError;
+use crate::error::Error;
 use crate::error::user_ctor_err;
 use crate::option::ModOption;
+use crate::trace::provided;
+use std::fmt;
 
 pub(crate) fn provide<M, F>(ctor: F) -> Box<dyn ModOption>
 where
@@ -92,7 +96,7 @@ impl ModOption for ProvideOption {
         let scope = app.current_scope;
         app.container
             .insert_provider(self.provider, scope, private)?;
-        crate::trace::provided(
+        provided(
             type_name,
             constructor,
             app.container.scopes().name(scope),
@@ -198,8 +202,8 @@ pub struct DynProvider {
     construct_fn: ConstructFn,
 }
 
-impl std::fmt::Debug for DynProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DynProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynProvider")
             .field("result", &self.result_name)
             .field(
@@ -253,7 +257,7 @@ impl DynProvider {
             result_type: TypeId::of::<crate::Group<T>>(),
             result_name: type_name::<crate::Group<T>>(),
             constructor_name: "<group aggregate>",
-            alias_types: [TypeId::of::<std::sync::Arc<crate::Group<T>>>()],
+            alias_types: [TypeId::of::<Arc<crate::Group<T>>>()],
             deps: DepList::empty(),
             construct_fn,
         }
@@ -301,7 +305,7 @@ fn ready_packed<T: Send + Sync + 'static>(value: T) -> ConstructOut {
     ConstructOut::Ready(pack(value))
 }
 
-fn ctor_failed<T: ?Sized>(err: impl Into<crate::error::BoxError>) -> crate::error::Error {
+fn ctor_failed<T: ?Sized>(err: impl Into<BoxError>) -> Error {
     user_ctor_err::<T>(err)
 }
 

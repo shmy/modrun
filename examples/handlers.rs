@@ -4,7 +4,10 @@
 //! cargo run --example handlers
 //! ```
 
+use modrun::logging::init;
 use modrun::{Group, Hook, Lifecycle, Modrun, Module, Result};
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Handler {
@@ -59,7 +62,7 @@ fn user_domain() -> Module {
 struct OrderRepo;
 
 async fn connect_order_repo() -> OrderRepo {
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    sleep(Duration::from_millis(10)).await;
     OrderRepo
 }
 
@@ -83,7 +86,7 @@ fn boot(lc: Lifecycle, registry: Registry, handlers: Group<Handler>) -> Result<(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    modrun::logging::init();
+    init();
 
     Modrun::builder()
         .provide(new_registry)

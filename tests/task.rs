@@ -6,6 +6,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use modrun::{Error, Lifecycle, Modrun, Shutdowner, hook, task, task_with};
+use std::future::pending;
+use std::net::SocketAddr;
+use std::time::Instant;
+use tokio::net::TcpListener;
+use tokio::task::yield_now;
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn task_runs_until_stop() {
@@ -70,7 +77,7 @@ async fn task_abort_on_stop_timeout() {
     fn boot(lc: Lifecycle, dropped: Arc<AtomicBool>) -> modrun::Result<()> {
         lc.append(task("hang", move |_stopped| async move {
             let _guard = Guard(dropped);
-            std::future::pending::<()>().await;
+            pending::<()>().await;
             Ok(())
         }))
     }
@@ -87,9 +94,9 @@ async fn task_abort_on_stop_timeout() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("timed out"), "{err}");
-    tokio::time::timeout(Duration::from_secs(1), async {
+    timeout(Duration::from_secs(1), async {
         while !dropped.load(Ordering::SeqCst) {
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
     })
     .await
@@ -121,7 +128,7 @@ async fn task_panic_unblocks_run() {
         }))
     }
 
-    let err = tokio::time::timeout(
+    let err = timeout(
         Duration::from_secs(2),
         Modrun::builder().no_banner().invoke(boot).run(),
     )
@@ -155,7 +162,7 @@ async fn task_success_does_not_request_shutdown() {
         .start()
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let requested = slot
         .lock()
         .unwrap()
@@ -176,7 +183,7 @@ async fn task_with_run_error_unblocks_run() {
         ))
     }
 
-    let err = tokio::time::timeout(
+    let err = timeout(
         Duration::from_secs(2),
         Modrun::builder().no_banner().invoke(boot).run(),
     )
@@ -193,13 +200,13 @@ async fn task_failure_during_later_start_is_not_ok() {
     fn boot(lc: Lifecycle) -> modrun::Result<()> {
         lc.append(task("die", |_stopped| async { Err(Error::hook("died")) }))?;
         lc.append(hook().on_start(|| async {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            sleep(Duration::from_secs(30)).await;
             Ok(())
         }))
     }
 
-    let started = std::time::Instant::now();
-    let err = tokio::time::timeout(
+    let started = Instant::now();
+    let err = timeout(
         Duration::from_secs(3),
         Modrun::builder()
             .no_banner()
@@ -243,14 +250,14 @@ async fn task_with_prepare_error_fails_start() {
 
 #[tokio::test]
 async fn task_with_bind_conflict_fails_start() {
-    let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let held = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = held.local_addr().unwrap();
 
-    fn boot(lc: Lifecycle, addr: std::net::SocketAddr) -> modrun::Result<()> {
+    fn boot(lc: Lifecycle, addr: SocketAddr) -> modrun::Result<()> {
         lc.append(task_with(
             "http.serve",
             move || async move {
-                tokio::net::TcpListener::bind(addr)
+                TcpListener::bind(addr)
                     .await
                     .map(|_| ())
                     .map_err(|e| Error::io(format!("bind {addr}"), e))

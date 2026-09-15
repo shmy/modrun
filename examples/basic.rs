@@ -6,7 +6,9 @@
 
 use std::time::Duration;
 
+use modrun::logging::init;
 use modrun::{Hook, Lifecycle, Modrun, Module, Result};
+use tokio::time::sleep;
 
 #[derive(Clone)]
 struct AppConfig {
@@ -26,7 +28,7 @@ struct Greeter {
 /// An async constructor: awaited while the graph is built, so `Greeter` below
 /// receives a repo that is already connected.
 async fn new_repo(cfg: AppConfig) -> GreeterRepo {
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    sleep(Duration::from_millis(10)).await;
     GreeterRepo {
         prefix: format!("hello from {}", cfg.name),
     }
@@ -61,7 +63,7 @@ fn greeter_domain() -> Module {
 
 #[tokio::main]
 async fn main() -> modrun::Result<()> {
-    modrun::logging::init();
+    init();
 
     Modrun::builder()
         .supply(AppConfig {

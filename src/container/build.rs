@@ -5,6 +5,22 @@ use crate::future::try_join_all;
 
 use super::Container;
 use super::types::{ConstructFuture, ConstructOut, Constructed, ProviderKey, TypeIdSet};
+use crate::error::Error;
+use crate::trace;
+use crate::trace::before_run;
+use crate::trace::emit_unfinished;
+use crate::trace::info_enabled;
+use crate::trace::run_cancelled;
+use crate::trace::run_err;
+use crate::trace::run_ok;
+use crate::trace::run_panicked;
+use std::future::Future;
+use std::mem::take;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Duration;
+use std::time::Instant;
 
 struct WaveGuard<'a> {
     container: &'a mut Container,
@@ -46,7 +62,7 @@ impl Container {
             if self.wave_scratch.is_empty() {
                 continue;
             }
-            let ready = std::mem::take(&mut self.wave_scratch);
+            let ready = take(&mut self.wave_scratch);
             self.run_wave(ready, pending).await?;
         }
 
@@ -56,7 +72,7 @@ impl Container {
                 .next()
                 .map(|k| self.key_name(*k))
                 .unwrap_or("<unknown>");
-            return Err(crate::error::Error::Cycle(name.to_owned()));
+            return Err(Error::Cycle(name.to_owned()));
         }
         Ok(())
     }
@@ -68,7 +84,7 @@ impl Container {
     ) -> Result<()> {
         for &key in &ready {
             if !self.constructing.insert(key) {
-                return Err(crate::error::Error::Cycle(self.key_name(key).to_owned()));
+                return Err(Error::Cycle(self.key_name(key).to_owned()));
             }
         }
 
@@ -91,23 +107,23 @@ impl Container {
                     container.scopes.name(key.scope),
                 )
             };
-            let trace_info = crate::trace::info_enabled();
+            let trace_info = info_enabled();
             if trace_info {
-                crate::trace::before_run(constructor, module);
+                before_run(constructor, module);
             }
-            let timed = trace_info.then(std::time::Instant::now);
+            let timed = trace_info.then(Instant::now);
             let mut call = ConstructCallGuard::new(constructor, module);
             let out = guard.container.construct_at(key);
             guard.container.leave_scope(previous);
             match out {
                 Err(err) => {
                     call.finish();
-                    crate::trace::run_err(constructor, module, &err);
+                    run_err(constructor, module, &err);
                     return Err(err);
                 }
                 Ok(ConstructOut::Ready(built)) => {
                     call.finish();
-                    let elapsed = crate::trace::elapsed(timed);
+                    let elapsed = trace::elapsed(timed);
                     readies.push((key, constructor, module, built, elapsed));
                 }
                 Ok(ConstructOut::Fut(fut)) => {
@@ -158,8 +174,8 @@ async fn join_constructs(
     }
 }
 
-fn finish_ready(name: &'static str, module: &'static str, elapsed: std::time::Duration) {
-    crate::trace::run_ok(name, module, elapsed);
+fn finish_ready(name: &'static str, module: &'static str, elapsed: Duration) {
+    run_ok(name, module, elapsed);
 }
 
 struct ConstructCallGuard {
@@ -184,10 +200,10 @@ impl ConstructCallGuard {
 
 impl Drop for ConstructCallGuard {
     fn drop(&mut self) {
-        crate::trace::emit_unfinished(
+        emit_unfinished(
             self.finished,
-            || crate::trace::run_panicked(self.name, self.module),
-            || crate::trace::run_cancelled(self.name, self.module),
+            || run_panicked(self.name, self.module),
+            || run_cancelled(self.name, self.module),
         );
     }
 }
@@ -196,7 +212,7 @@ struct TracedConstruct {
     name: &'static str,
     module: &'static str,
     fut: ConstructFuture,
-    timed: Option<std::time::Instant>,
+    timed: Option<Instant>,
     finished: bool,
 }
 
@@ -205,7 +221,7 @@ impl TracedConstruct {
         name: &'static str,
         module: &'static str,
         fut: ConstructFuture,
-        timed: Option<std::time::Instant>,
+        timed: Option<Instant>,
     ) -> Self {
         Self {
             name,
@@ -217,36 +233,33 @@ impl TracedConstruct {
     }
 }
 
-impl std::future::Future for TracedConstruct {
+impl Future for TracedConstruct {
     type Output = Result<Constructed>;
 
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         match this.fut.as_mut().poll(cx) {
-            std::task::Poll::Ready(Ok(built)) => {
+            Poll::Ready(Ok(built)) => {
                 this.finished = true;
-                crate::trace::run_ok(this.name, this.module, crate::trace::elapsed(this.timed));
-                std::task::Poll::Ready(Ok(built))
+                run_ok(this.name, this.module, trace::elapsed(this.timed));
+                Poll::Ready(Ok(built))
             }
-            std::task::Poll::Ready(Err(err)) => {
+            Poll::Ready(Err(err)) => {
                 this.finished = true;
-                crate::trace::run_err(this.name, this.module, &err);
-                std::task::Poll::Ready(Err(err))
+                run_err(this.name, this.module, &err);
+                Poll::Ready(Err(err))
             }
-            std::task::Poll::Pending => std::task::Poll::Pending,
+            Poll::Pending => Poll::Pending,
         }
     }
 }
 
 impl Drop for TracedConstruct {
     fn drop(&mut self) {
-        crate::trace::emit_unfinished(
+        emit_unfinished(
             self.finished,
-            || crate::trace::run_panicked(self.name, self.module),
-            || crate::trace::run_cancelled(self.name, self.module),
+            || run_panicked(self.name, self.module),
+            || run_cancelled(self.name, self.module),
         );
     }
 }

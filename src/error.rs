@@ -1,10 +1,17 @@
 //! Public error type for modrun.
 
+use std::any::type_name;
+use std::error;
+use std::fmt;
+use std::io;
+use std::result;
+use std::time::Duration;
+
 /// Owned user error retained as [`std::error::Error::source`].
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+pub type BoxError = Box<dyn error::Error + Send + Sync>;
 
 /// Result alias used throughout the crate and by hooks / fallible constructors.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 /// Errors produced while wiring, starting, or stopping an application.
 #[derive(Debug, thiserror::Error)]
@@ -116,19 +123,19 @@ pub enum Error {
 
     /// Graph construction exceeded its budget.
     #[error("application build timed out after {0:?}")]
-    BuildTimeout(std::time::Duration),
+    BuildTimeout(Duration),
 
     /// Start phase exceeded its budget.
     #[error("application start timed out after {0:?}")]
-    StartTimeout(std::time::Duration),
+    StartTimeout(Duration),
 
     /// Stop phase exceeded its budget.
     #[error("application stop timed out after {0:?}")]
-    StopTimeout(std::time::Duration),
+    StopTimeout(Duration),
 
     /// Unwind after a failed/cancelled start exceeded its budget.
     #[error("application stop timed out after {0:?} while unwinding")]
-    UnwindTimeout(std::time::Duration),
+    UnwindTimeout(Duration),
 
     /// A background [`crate::task`] failed while start was still running, and
     /// unwind did not surface a more specific join error.
@@ -137,15 +144,15 @@ pub enum Error {
 
     /// Failed to install a SIGINT listener.
     #[error("failed to listen for SIGINT: {0}")]
-    SigintListen(#[source] std::io::Error),
+    SigintListen(#[source] io::Error),
 
     /// Failed to install a SIGTERM listener.
     #[error("failed to listen for SIGTERM: {0}")]
-    SigtermListen(#[source] std::io::Error),
+    SigtermListen(#[source] io::Error),
 
     /// Failed to install a process-signal listener (non-Unix platforms).
     #[error("failed to listen for process signal: {0}")]
-    SignalListen(#[source] std::io::Error),
+    SignalListen(#[source] io::Error),
 
     /// Several OnStop hooks failed; see [`MultipleStopError::errors`].
     #[error(transparent)]
@@ -186,7 +193,7 @@ pub enum Error {
         context: String,
         /// Underlying I/O error.
         #[source]
-        source: std::io::Error,
+        source: io::Error,
     },
 }
 
@@ -219,17 +226,17 @@ impl MultipleStopError {
     }
 }
 
-impl std::fmt::Display for MultipleStopError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for MultipleStopError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} OnStop hooks failed: {}", self.count, self.summary)
     }
 }
 
-impl std::error::Error for MultipleStopError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl error::Error for MultipleStopError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.errors
             .first()
-            .map(|e| e as &(dyn std::error::Error + 'static))
+            .map(|e| e as &(dyn error::Error + 'static))
     }
 }
 
@@ -264,7 +271,7 @@ impl Error {
     ///
     /// There is no `From<std::io::Error>` impl, so `listener.bind().await?` does
     /// not compile in a `modrun::Result` function — map with this helper instead.
-    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+    pub fn io(context: impl Into<String>, source: io::Error) -> Self {
         Self::Io {
             context: context.into(),
             source,
@@ -273,7 +280,7 @@ impl Error {
 
     pub(crate) fn constructor_failed<T: ?Sized>(err: impl Into<BoxError>) -> Self {
         Self::ConstructorFailed {
-            type_name: std::any::type_name::<T>(),
+            type_name: type_name::<T>(),
             source: err.into(),
         }
     }
@@ -354,10 +361,11 @@ pub(crate) fn with_cleanup(earlier: Error, cleanup: Result<()>) -> Error {
 mod tests {
     use super::*;
     use std::error::Error as StdError;
+    use std::io;
 
     #[test]
     fn hook_preserves_io_source() {
-        let err = Error::hook(std::io::Error::other("disk full"));
+        let err = Error::hook(io::Error::other("disk full"));
         let src = StdError::source(&err).expect("source");
         assert!(src.to_string().contains("disk full"), "source was {src}");
     }
@@ -375,7 +383,7 @@ mod tests {
 
     #[test]
     fn io_helper_sets_context_and_source() {
-        let err = Error::io("bind", std::io::Error::other("addr in use"));
+        let err = Error::io("bind", io::Error::other("addr in use"));
         match &err {
             Error::Io { context, source } => {
                 assert_eq!(context, "bind");
@@ -452,8 +460,7 @@ mod tests {
 
     #[test]
     fn with_hook_name_leaves_io_unchanged() {
-        let err =
-            Error::io("bind", std::io::Error::other("addr in use")).with_hook_name("http.serve");
+        let err = Error::io("bind", io::Error::other("addr in use")).with_hook_name("http.serve");
         match err {
             Error::Io { context, .. } => assert_eq!(context, "bind"),
             other => panic!("expected Io, got {other}"),

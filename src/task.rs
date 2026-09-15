@@ -8,6 +8,10 @@ use tokio::task::JoinHandle;
 use crate::error::{Error, Result};
 use crate::lifecycle::Hook;
 use crate::shutdown::Shutdowner;
+use std::error;
+use std::fmt;
+use tokio::task::AbortHandle;
+use tokio::task::JoinError;
 
 /// Completes when the matching [`Task`] / [`PreparedTask`] begins OnStop (or is
 /// dropped).
@@ -48,7 +52,7 @@ struct LiveTask {
     name: &'static str,
     stop_tx: Option<oneshot::Sender<()>>,
     handle: Option<JoinHandle<Result<()>>>,
-    work_abort: Option<tokio::task::AbortHandle>,
+    work_abort: Option<AbortHandle>,
     shutdown: Option<Shutdowner>,
 }
 
@@ -129,17 +133,17 @@ impl Drop for LiveTask {
 #[derive(Debug)]
 struct TaskJoinError {
     name: &'static str,
-    source: tokio::task::JoinError,
+    source: JoinError,
 }
 
-impl std::fmt::Display for TaskJoinError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TaskJoinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "task '{}': {}", self.name, self.source)
     }
 }
 
-impl std::error::Error for TaskJoinError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl error::Error for TaskJoinError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         Some(&self.source)
     }
 }
@@ -262,8 +266,8 @@ where
     }
 }
 
-impl<F> std::fmt::Debug for Task<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<F> fmt::Debug for Task<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
             .field("name", &self.live.name)
             .field("running", &self.live.handle.is_some())
@@ -271,8 +275,8 @@ impl<F> std::fmt::Debug for Task<F> {
     }
 }
 
-impl<P, R> std::fmt::Debug for PreparedTask<P, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<P, R> fmt::Debug for PreparedTask<P, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PreparedTask")
             .field("name", &self.live.name)
             .field("running", &self.live.handle.is_some())

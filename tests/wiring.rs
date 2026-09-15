@@ -6,6 +6,9 @@ use std::sync::{
 };
 
 use modrun::Modrun;
+use std::error::Error;
+use std::result::Result;
+use tokio::task::yield_now;
 
 #[tokio::test]
 async fn provide_result_and_deps() {
@@ -19,7 +22,7 @@ async fn provide_result_and_deps() {
         cfg: Config,
     }
 
-    fn new_config() -> std::result::Result<Config, &'static str> {
+    fn new_config() -> Result<Config, &'static str> {
         Ok(Config { port: 9090 })
     }
 
@@ -85,12 +88,12 @@ async fn async_constructors_are_awaited_in_dependency_order() {
     struct Repo(&'static str);
 
     async fn connect() -> Pool {
-        tokio::task::yield_now().await;
+        yield_now().await;
         Pool("connected")
     }
 
-    async fn new_repo(pool: Pool) -> std::result::Result<Repo, &'static str> {
-        tokio::task::yield_now().await;
+    async fn new_repo(pool: Pool) -> Result<Repo, &'static str> {
+        yield_now().await;
         Ok(Repo(pool.0))
     }
 
@@ -115,7 +118,7 @@ async fn async_constructor_failure_surfaces() {
     #[derive(Clone)]
     struct Pool;
 
-    async fn connect() -> std::result::Result<Pool, &'static str> {
+    async fn connect() -> Result<Pool, &'static str> {
         Err("connection refused")
     }
 
@@ -127,7 +130,7 @@ async fn async_constructor_failure_surfaces() {
         .unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("connection refused"), "unexpected: {msg}");
-    let src = std::error::Error::source(&err).expect("source");
+    let src = Error::source(&err).expect("source");
     assert!(
         src.to_string().contains("connection refused"),
         "source was {src}"
@@ -258,7 +261,7 @@ async fn invoker_missing_dependency_fails_before_construction() {
 
 #[tokio::test]
 async fn fallible_invoker_error_is_contextualized() {
-    fn boom() -> std::result::Result<(), &'static str> {
+    fn boom() -> Result<(), &'static str> {
         Err("nope")
     }
 
@@ -269,7 +272,7 @@ async fn fallible_invoker_error_is_contextualized() {
         "unexpected: {msg}"
     );
     assert!(msg.contains("boom"), "unexpected: {msg}");
-    let src = std::error::Error::source(&err).expect("source");
+    let src = Error::source(&err).expect("source");
     assert!(src.to_string().contains("nope"), "source was {src}");
 }
 

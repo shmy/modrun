@@ -13,7 +13,7 @@ Maintenance release; no application API changes.
 
 ### Changed
 
-* Dev-dependency `criterion` upgraded to 0.8 (benchmarks only).
+* Dev-dependency `criterion` upgraded to 0.7 (benchmarks only; 0.8 requires Rust 1.86, above this crate's MSRV 1.85).
 
 ## [1.0.0] - 2026-09-02
 

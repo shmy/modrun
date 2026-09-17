@@ -1,7 +1,6 @@
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::error::Error;
 use crate::error::Result;
 use crate::provide::DynProvider;
 use crate::scope::{ScopeId, ScopeTree};
@@ -147,14 +146,15 @@ impl Container {
             .unwrap_or(false)
     }
 
-    pub(crate) fn construct_at(&mut self, key: ProviderKey) -> Result<ConstructOut> {
-        let provider = self
-            .providers
-            .remove(&key)
-            .ok_or_else(|| Error::NotConstructed(self.key_name(key)))?;
-        let out = provider.construct(self);
+    /// Remove a provider so its constructor can borrow the container mutably.
+    /// The caller must return it via [`put_provider`](Self::put_provider).
+    pub(crate) fn take_provider(&mut self, key: ProviderKey) -> Option<DynProvider> {
+        self.providers.remove(&key)
+    }
+
+    /// Reinsert a provider taken by [`take_provider`](Self::take_provider).
+    pub(crate) fn put_provider(&mut self, key: ProviderKey, provider: DynProvider) {
         self.providers.insert(key, provider);
-        out
     }
 
     pub(crate) fn key_name(&self, key: ProviderKey) -> &'static str {

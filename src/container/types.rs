@@ -1,5 +1,4 @@
 use std::any::TypeId;
-use std::sync::Arc;
 
 use crate::future::BoxFuture;
 use crate::scope::ScopeId;
@@ -66,10 +65,6 @@ impl Hasher for TypeIdHasher {
 
 pub(crate) type TypeIdMap<K, V> = HashMap<K, V, BuildHasherDefault<TypeIdHasher>>;
 pub(crate) type TypeIdSet<K> = HashSet<K, BuildHasherDefault<TypeIdHasher>>;
-
-/// Stored under [`TypeId::of::<Arc<T>>()`] so `get::<Arc<T>>()` can recover the
-/// handle without an extra `Arc<Arc<T>>` allocation.
-pub(crate) struct ArcBox<T: Send + Sync + ?Sized>(pub Arc<T>);
 
 pub(crate) type ArcRegisterFn = fn(&mut TypeIdMap<TypeId, ArcResolveFn>);
 

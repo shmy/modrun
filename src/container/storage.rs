@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::scope::ScopeId;
 
-use super::types::{ArcBox, Constructed, ValueNode};
+use super::types::{Constructed, ValueNode};
 use super::{ArcResolveFn, Container, DynAny, TypeIdMap};
 use crate::lifecycle::Lifecycle;
 use crate::shutdown::Shutdowner;
@@ -14,10 +14,10 @@ pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
     let arc = Arc::new(value);
     Constructed {
         value: Arc::clone(&arc) as DynAny,
-        arc_alias: Some((
-            TypeId::of::<Arc<T>>(),
-            Arc::new(ArcBox(Arc::clone(&arc))) as DynAny,
-        )),
+        // Alias the same handle under `Arc<T>`'s id. This is a refcount bump, not
+        // a second allocation: the stored value already *is* an `Arc<T>`, so
+        // `get::<Arc<T>>()` can `Arc::downcast` it directly.
+        arc_alias: Some((TypeId::of::<Arc<T>>(), arc as DynAny)),
         register_arc: Some(|map| register_arc_resolver::<T>(map)),
     }
 }
@@ -26,11 +26,8 @@ pub(crate) fn register_arc_resolver<T: Send + Sync + 'static>(
     resolvers: &mut TypeIdMap<TypeId, ArcResolveFn>,
 ) {
     fn resolve<T: Send + Sync + 'static>(value: &DynAny) -> Result<Box<dyn Any + Send + Sync>> {
-        let arc = value
-            .downcast_ref::<ArcBox<T>>()
-            .ok_or_else(|| Error::Downcast(type_name::<Arc<T>>()))?
-            .0
-            .clone();
+        let arc = Arc::downcast::<T>(Arc::clone(value))
+            .map_err(|_| Error::Downcast(type_name::<Arc<T>>()))?;
         Ok(Box::new(arc))
     }
     resolvers

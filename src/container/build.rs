@@ -97,23 +97,22 @@ impl Container {
         let mut readies = Vec::with_capacity(guard.keys.len());
         for &key in &guard.keys {
             let previous = guard.container.enter_scope(key.scope);
-            let (constructor, module) = {
-                let container = &*guard.container;
-                let provider = container
-                    .provider_at(key)
-                    .expect("pending key missing provider");
-                (
-                    provider.constructor_name(),
-                    container.scopes.name(key.scope),
-                )
-            };
+            // Take the provider out so its constructor can borrow the container
+            // mutably; this also yields the trace names without a second lookup.
+            let provider = guard
+                .container
+                .take_provider(key)
+                .expect("pending key missing provider");
+            let constructor = provider.constructor_name();
+            let module = guard.container.scopes.name(key.scope);
             let trace_info = info_enabled();
             if trace_info {
                 before_run(constructor, module);
             }
             let timed = trace_info.then(Instant::now);
             let mut call = ConstructCallGuard::new(constructor, module);
-            let out = guard.container.construct_at(key);
+            let out = provider.construct(guard.container);
+            guard.container.put_provider(key, provider);
             guard.container.leave_scope(previous);
             match out {
                 Err(err) => {

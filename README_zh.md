@@ -389,6 +389,8 @@ let dot = Modrun::builder()
 [`modrun::logging::init()`](https://docs.rs/modrun/latest/modrun/logging/fn.init.html)
 给示例和本地二进制用（默认 feature `logging`）。日志打到 stderr，仅在 stderr 是 TTY 时开 ANSI；如果已经安装了 subscriber，它是 **no-op**，不会 panic。生产服务应自己装 subscriber，跳过这个助手。没有 subscriber 时，这些事件是廉价空操作：
 
+`RUST_LOG` / 按目标过滤来自 `env-filter` feature（默认开启，会拉入 `regex-automata` / `matchers`）。如果只想要控制台输出、不想要这些 regex 依赖，用 `default-features = false` 搭配 `features = ["logging"]`，此时助手改为安装全局 `INFO` 级别。
+
 ```rust,no_run
 fn main() {
     #[cfg(feature = "logging")]

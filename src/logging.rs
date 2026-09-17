@@ -14,6 +14,7 @@ use std::io::IsTerminal;
 use std::io::stderr;
 use tracing::Event;
 use tracing::field::{Field, Visit};
+#[cfg(feature = "env-filter")]
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
@@ -35,6 +36,9 @@ pub fn init() {
 
 /// Like [`init`], returning `true` when this process's global subscriber was
 /// installed by this call.
+///
+/// Respects `RUST_LOG` when set; otherwise defaults to `modrun=info`.
+#[cfg(feature = "env-filter")]
 #[must_use]
 pub fn try_init() -> bool {
     let filter =
@@ -42,16 +46,40 @@ pub fn try_init() -> bool {
     try_init_with_filter(filter)
 }
 
+/// Like [`init`], returning `true` when this process's global subscriber was
+/// installed by this call.
+///
+/// Without the `env-filter` feature there is no `RUST_LOG` / per-target
+/// support: this installs a global `INFO` max level. Enable `env-filter` for
+/// `RUST_LOG` and per-target filtering.
+#[cfg(not(feature = "env-filter"))]
+#[must_use]
+pub fn try_init() -> bool {
+    tracing_subscriber::fmt()
+        .with_writer(stderr)
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(stderr().is_terminal())
+        .event_format(MessageOnly)
+        .try_init()
+        .is_ok()
+}
+
 /// Install a minimal tracing subscriber with an explicit filter.
 ///
 /// No-op when a subscriber is already installed. See [`init`].
 /// Writes to stderr. ANSI colors are enabled only when stderr is a terminal.
+///
+/// Requires the `env-filter` feature.
+#[cfg(feature = "env-filter")]
 pub fn init_with_filter(filter: EnvFilter) {
     let _ = try_init_with_filter(filter);
 }
 
 /// Like [`init_with_filter`], returning `true` when this call installed the
 /// global subscriber.
+///
+/// Requires the `env-filter` feature.
+#[cfg(feature = "env-filter")]
 #[must_use]
 pub fn try_init_with_filter(filter: EnvFilter) -> bool {
     tracing_subscriber::fmt()

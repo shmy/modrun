@@ -191,7 +191,12 @@
 //!   `default-features = false` when you only call [`ModrunBuilder::start`] or
 //!   wait on [`Shutdowner`] yourself.
 //! * **`logging`** — `modrun::logging::init` / `try_init` for fx-style console
-//!   output. Skip it in production and install your own subscriber.
+//!   output (`fmt`-only, no regex crates). Skip it in production and install
+//!   your own subscriber.
+//! * **`env-filter`** — adds `RUST_LOG` / per-target filtering to
+//!   `modrun::logging` (pulls `regex-automata`, `matchers`). Implies
+//!   `logging`; on by default. Use `default-features = false` +
+//!   `features = ["logging"]` for console output without the regex deps.
 
 #![forbid(unsafe_code)]
 

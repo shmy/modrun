@@ -185,7 +185,7 @@ impl Container {
         for (&element, &type_name) in &self.groups.required {
             let members = self
                 .groups
-            .members
+                .members
                 .get(&GroupElementKey { element })
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
@@ -277,7 +277,7 @@ impl Container {
             let virtual_key = reg.virtual_key;
             let members = self
                 .groups
-            .members
+                .members
                 .get(&GroupElementKey {
                     element: reg.element,
                 })
@@ -432,7 +432,7 @@ impl Container {
         if let Some(&element) = self.groups.virtual_to_element.get(&key) {
             for &member_key in self
                 .groups
-            .members
+                .members
                 .get(&GroupElementKey { element })
                 .into_iter()
                 .flatten()

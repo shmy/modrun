@@ -496,6 +496,11 @@ feature). It writes to stderr, enables ANSI only when stderr is a TTY, and is a
 services should install their own subscriber and skip this helper. Without a
 subscriber the events are cheap no-ops:
 
+`RUST_LOG` / per-target filtering comes from the `env-filter` feature (on by
+default, pulls `regex-automata` / `matchers`). For console output without those
+regex crates, use `default-features = false` with `features = ["logging"]`; the
+helper then installs a global `INFO` max level instead.
+
 ```rust,no_run
 fn main() {
     #[cfg(feature = "logging")]

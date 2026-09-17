@@ -107,6 +107,7 @@ impl Container {
 
     pub(crate) fn store_value(&mut self, id: TypeId, value: DynAny, scope: ScopeId, private: bool) {
         if private {
+            self.mark_private_scope(scope);
             self.values_private.insert((id, scope), value);
         } else {
             self.values_public.insert(id, value);

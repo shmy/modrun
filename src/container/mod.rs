@@ -44,6 +44,11 @@ pub(crate) struct Container {
     pub(crate) required_groups: TypeIdMap<TypeId, &'static str>,
     pub(crate) next_group_member_id: u32,
     pub(crate) value_nodes: Vec<ValueNode>,
+    /// `private_scopes[scope]` is `true` when at least one private binding
+    /// (provider, alias, or supplied value) is registered in that scope.
+    /// Lets ancestor-chain lookups skip the per-scope private probes for the
+    /// common case of purely organizational nesting.
+    pub(crate) private_scopes: Vec<bool>,
 }
 
 impl Container {
@@ -70,6 +75,7 @@ impl Container {
             required_groups: TypeIdMap::default(),
             next_group_member_id: 0,
             value_nodes: Vec::new(),
+            private_scopes: Vec::new(),
         }
     }
 
@@ -102,6 +108,7 @@ impl Container {
         }
         let key = ProviderKey::singleton(id, scope, private);
         if private {
+            self.mark_private_scope(scope);
             for &alias in provider.alias_types() {
                 self.private_alias.insert((alias, scope), key);
             }
@@ -120,6 +127,24 @@ impl Container {
 
     pub(crate) fn provider_at(&self, key: ProviderKey) -> Option<&DynProvider> {
         self.providers.get(&key)
+    }
+
+    /// Record that `scope` holds at least one private binding.
+    pub(crate) fn mark_private_scope(&mut self, scope: ScopeId) {
+        let idx = scope.discriminant() as usize;
+        if idx >= self.private_scopes.len() {
+            self.private_scopes.resize(idx + 1, false);
+        }
+        self.private_scopes[idx] = true;
+    }
+
+    /// Whether `scope` has any private binding. Chains of purely organizational
+    /// modules return `false` and skip the private probes during resolution.
+    pub(crate) fn scope_has_private(&self, scope: ScopeId) -> bool {
+        self.private_scopes
+            .get(scope.discriminant() as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     pub(crate) fn construct_at(&mut self, key: ProviderKey) -> Result<ConstructOut> {

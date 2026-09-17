@@ -12,6 +12,9 @@ impl Container {
     /// private binding up the scope chain, else the public one.
     pub(crate) fn lookup_value_ref_from(&self, id: TypeId, from: ScopeId) -> Option<&DynAny> {
         for scope in self.scopes.ancestors_from(from) {
+            if !self.scope_has_private(scope) {
+                continue;
+            }
             if let Some(v) = self.values_private.get(&(id, scope)) {
                 return Some(v);
             }
@@ -34,6 +37,9 @@ impl Container {
         from: ScopeId,
     ) -> Option<(ProviderKey, &DynProvider)> {
         for scope in self.scopes.ancestors_from(from) {
+            if !self.scope_has_private(scope) {
+                continue;
+            }
             let key = ProviderKey::singleton(id, scope, true);
             if let Some(p) = self.providers.get(&key) {
                 return Some((key, p));
@@ -222,7 +228,10 @@ impl Container {
             .copied()
             .filter(|key| indegree.get(key) == Some(&0))
             .collect();
-        ready.sort_by_key(|key| self.order_index(*key));
+        // `provider_order` is registration order and `order_index` is a key's
+        // position within it, so filtering above already yields ascending
+        // `order_index` — no initial sort needed. Later waves (`next`) are built
+        // from dependent traversal and still need ordering.
         let mut layers = Vec::new();
         let mut built = 0usize;
         while !ready.is_empty() {
@@ -280,6 +289,9 @@ impl Container {
 
     fn can_resolve(&self, id: TypeId, from: ScopeId) -> bool {
         for scope in self.scopes.ancestors_from(from) {
+            if !self.scope_has_private(scope) {
+                continue;
+            }
             if self.values_private.contains_key(&(id, scope)) {
                 return true;
             }
@@ -344,6 +356,9 @@ impl Container {
         from: ScopeId,
     ) -> Option<(ScopeId, bool)> {
         for scope in self.scopes.ancestors_from(from) {
+            if !self.scope_has_private(scope) {
+                continue;
+            }
             if self.values_private.contains_key(&(id, scope)) {
                 return Some((scope, true));
             }

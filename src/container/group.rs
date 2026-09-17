@@ -81,14 +81,16 @@ impl Container {
         group_name: &'static str,
     ) -> Result<Vec<T>> {
         let element_key = GroupElementKey { element };
-        let len = self
+        // Copy the member keys out once (they are `Copy`) so the drain loop does
+        // not re-hash `element_key` on every iteration to satisfy the borrow
+        // checker for `take_group_member`.
+        let keys: Vec<ProviderKey> = self
             .group_members
             .get(&element_key)
-            .map(|members| members.len())
-            .unwrap_or(0);
-        let mut items = Vec::with_capacity(len);
-        for i in 0..len {
-            let key = self.group_members.get(&element_key).expect("group members")[i];
+            .cloned()
+            .unwrap_or_default();
+        let mut items = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = self
                 .take_group_member(key)
                 .ok_or_else(|| Error::NotConstructed(group_name))?;

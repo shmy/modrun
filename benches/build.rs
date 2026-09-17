@@ -260,12 +260,99 @@ fn bench_groups(c: &mut Criterion) {
     group.finish();
 }
 
+// --- Ancestor-chain resolution stress -------------------------------------
+//
+// Every public dependency lookup walks the whole scope chain from the current
+// module up to root (checking private bindings at each level) before falling
+// through to `values_public`. This benchmark nests `DEPTH` modules and, at the
+// deepest one, constructs 8 services that each depend on 3 root-level public
+// values — so each construction walks the full chain three times.
+
+#[derive(Clone)]
+struct Root0(u32);
+#[derive(Clone)]
+struct Root1(u32);
+#[derive(Clone)]
+struct Root2(u32);
+
+#[derive(Clone)]
+struct Deep<const N: usize>(u32);
+
+fn make_deep<const N: usize>(a: Root0, b: Root1, c: Root2) -> Deep<N> {
+    Deep(a.0 + b.0 + c.0 + N as u32)
+}
+
+const DEEP_DEPTHS: [usize; 3] = [8, 24, 48];
+
+fn nest_to_depth(leaf: Module, depth: usize) -> Module {
+    // Module names are `&'static str`; a fixed pool keeps names static while
+    // still deepening the ancestor chain to `depth`.
+    const NAMES: [&str; 48] = [
+        "d00", "d01", "d02", "d03", "d04", "d05", "d06", "d07", "d08", "d09", "d10", "d11", "d12",
+        "d13", "d14", "d15", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d25",
+        "d26", "d27", "d28", "d29", "d30", "d31", "d32", "d33", "d34", "d35", "d36", "d37", "d38",
+        "d39", "d40", "d41", "d42", "d43", "d44", "d45", "d46", "d47",
+    ];
+    let mut module = leaf;
+    for level in 0..depth {
+        module = Module::builder(NAMES[level % NAMES.len()]).module(module);
+    }
+    module
+}
+
+async fn cold_start_deep_resolution(depth: usize) {
+    let leaf = Module::builder("leaf")
+        .provide(make_deep::<0>)
+        .provide(make_deep::<1>)
+        .provide(make_deep::<2>)
+        .provide(make_deep::<3>)
+        .provide(make_deep::<4>)
+        .provide(make_deep::<5>)
+        .provide(make_deep::<6>)
+        .provide(make_deep::<7>)
+        .invoke(
+            |_: Deep<0>,
+             _: Deep<1>,
+             _: Deep<2>,
+             _: Deep<3>,
+             _: Deep<4>,
+             _: Deep<5>,
+             _: Deep<6>,
+             _: Deep<7>| {},
+        );
+
+    Modrun::builder()
+        .no_banner()
+        .supply(Root0(1))
+        .supply(Root1(2))
+        .supply(Root2(3))
+        .module(nest_to_depth(leaf, depth))
+        .start()
+        .await
+        .unwrap()
+        .stop()
+        .await
+        .unwrap();
+}
+
+fn bench_deep_resolution(c: &mut Criterion) {
+    let rt = runtime();
+    let mut group = c.benchmark_group("deep_resolution");
+    for depth in DEEP_DEPTHS {
+        group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, &depth| {
+            b.to_async(&rt).iter(|| cold_start_deep_resolution(depth));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     build_small,
     build_deep_modules,
     bench_groups,
     lifecycle_hooks,
-    async_independent_ctors
+    async_independent_ctors,
+    bench_deep_resolution
 );
 criterion_main!(benches);

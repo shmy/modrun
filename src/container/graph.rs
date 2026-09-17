@@ -103,7 +103,8 @@ impl Container {
             .group_element_type(group_type)
             .expect("group type missing element mapping");
         for &member_key in self
-            .group_members
+            .groups
+            .members
             .get(&GroupElementKey { element })
             .into_iter()
             .flatten()
@@ -181,9 +182,10 @@ impl Container {
     }
 
     fn validate_required_groups(&self) -> Result<()> {
-        for (&element, &type_name) in &self.required_groups {
+        for (&element, &type_name) in &self.groups.required {
             let members = self
-                .group_members
+                .groups
+            .members
                 .get(&GroupElementKey { element })
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
@@ -271,10 +273,11 @@ impl Container {
         indegree: &mut TypeIdMap<ProviderKey, usize>,
         dependents: &mut TypeIdMap<ProviderKey, Vec<ProviderKey>>,
     ) {
-        for reg in self.group_registrations.values() {
+        for reg in self.groups.registrations.values() {
             let virtual_key = reg.virtual_key;
             let members = self
-                .group_members
+                .groups
+            .members
                 .get(&GroupElementKey {
                     element: reg.element,
                 })
@@ -426,9 +429,10 @@ impl Container {
             }
         }
 
-        if let Some(&element) = self.group_virtual_to_element.get(&key) {
+        if let Some(&element) = self.groups.virtual_to_element.get(&key) {
             for &member_key in self
-                .group_members
+                .groups
+            .members
                 .get(&GroupElementKey { element })
                 .into_iter()
                 .flatten()

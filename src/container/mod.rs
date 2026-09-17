@@ -12,11 +12,10 @@ mod group;
 mod storage;
 mod types;
 
+pub(crate) use group::Groups;
 pub(crate) use storage::{pack, seed_builtins};
 pub(crate) use types::ConstructOut;
-pub(crate) use types::{
-    GroupElementKey, GroupRegistration, ProviderKey, TypeIdMap, TypeIdSet, ValueNode,
-};
+pub(crate) use types::{GroupElementKey, ProviderKey, TypeIdMap, TypeIdSet, ValueNode};
 
 pub(crate) type DynAny = Arc<dyn Any + Send + Sync>;
 pub(crate) type ArcResolveFn = fn(&DynAny) -> Result<Box<dyn Any + Send + Sync>>;
@@ -35,13 +34,7 @@ pub(crate) struct Container {
     pub(crate) layers: Vec<Vec<ProviderKey>>,
     pub(crate) arc_resolvers: TypeIdMap<TypeId, ArcResolveFn>,
     pub(crate) wave_scratch: Vec<ProviderKey>,
-    pub(crate) group_members: TypeIdMap<GroupElementKey, Vec<ProviderKey>>,
-    pub(crate) group_registrations: TypeIdMap<TypeId, GroupRegistration>,
-    pub(crate) group_virtual_to_element: TypeIdMap<ProviderKey, TypeId>,
-    pub(crate) group_by_type: TypeIdMap<TypeId, TypeId>,
-    pub(crate) member_values: TypeIdMap<ProviderKey, DynAny>,
-    pub(crate) required_groups: TypeIdMap<TypeId, &'static str>,
-    pub(crate) next_group_member_id: u32,
+    pub(crate) groups: Groups,
     pub(crate) value_nodes: Vec<ValueNode>,
     /// `private_scopes[scope]` is `true` when at least one private binding
     /// (provider, alias, or supplied value) is registered in that scope.
@@ -66,13 +59,7 @@ impl Container {
             layers: Vec::new(),
             arc_resolvers: TypeIdMap::default(),
             wave_scratch: Vec::new(),
-            group_members: TypeIdMap::default(),
-            group_registrations: TypeIdMap::default(),
-            group_virtual_to_element: TypeIdMap::default(),
-            group_by_type: TypeIdMap::default(),
-            member_values: TypeIdMap::default(),
-            required_groups: TypeIdMap::default(),
-            next_group_member_id: 0,
+            groups: Groups::default(),
             value_nodes: Vec::new(),
             private_scopes: Vec::new(),
         }

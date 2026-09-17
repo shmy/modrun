@@ -71,7 +71,7 @@ impl<'a> DotRenderer<'a> {
                     label_type_name(provider.result_name()),
                     short_name(provider.constructor_name()),
                 )
-            } else if self.container.group_virtual_to_element.contains_key(&key) {
+            } else if self.container.groups.virtual_to_element.contains_key(&key) {
                 format!(
                     "{}\nctor={}\n(group aggregate)",
                     display_type_name(provider.result_name()),
@@ -146,11 +146,12 @@ impl<'a> DotRenderer<'a> {
     }
 
     fn collect_group_edges(&mut self) {
-        for reg in self.container.group_registrations.values() {
+        for reg in self.container.groups.registrations.values() {
             let group = self.node_index(&self.provider_node_key(reg.virtual_key));
             let members = self
                 .container
-                .group_members
+                .groups
+                .members
                 .get(&GroupElementKey {
                     element: reg.element,
                 })
@@ -240,7 +241,7 @@ impl<'a> DotRenderer<'a> {
                 key.ordinal
             );
         }
-        let type_name = if self.container.group_virtual_to_element.contains_key(&key) {
+        let type_name = if self.container.groups.virtual_to_element.contains_key(&key) {
             display_type_name(provider.result_name())
         } else {
             label_type_name(provider.result_name())

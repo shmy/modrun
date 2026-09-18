@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [1.1.0] - 2026-09-18
+
+### Added
+
+* **`env-filter` feature** — `RUST_LOG` / per-target filtering for `modrun::logging` is now a separate feature (implies `logging`). Default features include it, so behavior is unchanged for existing default-feature users. Use `default-features = false` + `features = ["logging"]` for fx-style console output without the `regex-automata` / `matchers` dependencies; [`try_init`](https://docs.rs/modrun/latest/modrun/logging/fn.try_init.html) then installs a global `INFO` max level instead.
+
+### Changed
+
+* Container: skip ancestor-chain walks for scopes with no private bindings, reducing dependency-resolution overhead in deep module trees.
+* Container: eliminate `ArcBox` alias allocation and streamline construction access paths.
+
 ## [1.0.2] - 2026-09-15
 
 ### Fixed
@@ -62,7 +73,10 @@ remains intentionally unstable relative to typed `provide` / `invoke`.
 * OS signal listeners no longer treat a closed signal stream (`recv() == None`) as Ctrl-C / SIGTERM.
 * OnStart `Err` unwinds stop-only hooks that sit after a start hook that never ran, matching shutdown/timeout cancel.
 
+[1.1.0]: https://github.com/shmy/modrun/releases/tag/v1.1.0
+
 [1.0.2]: https://github.com/shmy/modrun/releases/tag/v1.0.2
+
 [1.0.1]: https://github.com/shmy/modrun/releases/tag/v1.0.1
 
 [1.0.0]: https://github.com/shmy/modrun/releases/tag/v1.0.0

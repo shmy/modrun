@@ -1,38 +1,32 @@
-use std::any::{TypeId, type_name};
+use std::any::{Any, TypeId, type_name};
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::scope::ScopeId;
 
-use super::types::{Constructed, ValueNode};
-use super::{ArcResolveFn, Container, DynAny, TypeIdMap};
+use super::types::{Constructed, StoredValue, ValueNode};
+use super::{Container, DynAny};
 use crate::lifecycle::Lifecycle;
 use crate::shutdown::Shutdowner;
-use std::any::Any;
 
 pub(crate) fn pack<T: Send + Sync + 'static>(value: T) -> Constructed {
     let arc = Arc::new(value);
     Constructed {
         value: Arc::clone(&arc) as DynAny,
         // Alias the same handle under `Arc<T>`'s id. This is a refcount bump, not
-        // a second allocation: the stored value already *is* an `Arc<T>`, so
-        // `get::<Arc<T>>()` can `Arc::downcast` it directly.
-        arc_alias: Some((TypeId::of::<Arc<T>>(), arc as DynAny)),
-        register_arc: Some(|map| register_arc_resolver::<T>(map)),
+        // a second allocation: the handle already points at `T`, and the stored
+        // extractor turns it back into `Arc<T>` for `get::<Arc<T>>()`.
+        arc_alias: Some((TypeId::of::<Arc<T>>(), arc as DynAny, extract_arc::<T>)),
     }
 }
 
-pub(crate) fn register_arc_resolver<T: Send + Sync + 'static>(
-    resolvers: &mut TypeIdMap<TypeId, ArcResolveFn>,
-) {
-    fn resolve<T: Send + Sync + 'static>(value: &DynAny) -> Result<Box<dyn Any + Send + Sync>> {
-        let arc = Arc::downcast::<T>(Arc::clone(value))
-            .map_err(|_| Error::Downcast(type_name::<Arc<T>>()))?;
-        Ok(Box::new(arc))
-    }
-    resolvers
-        .entry(TypeId::of::<Arc<T>>())
-        .or_insert(resolve::<T>);
+/// Recover `Arc<T>` out of the stored handle (whose pointee is `T`).
+pub(crate) fn extract_arc<T: Send + Sync + 'static>(
+    value: &DynAny,
+) -> Result<Box<dyn Any + Send + Sync>> {
+    let arc = Arc::downcast::<T>(Arc::clone(value))
+        .map_err(|_| Error::Downcast(type_name::<Arc<T>>()))?;
+    Ok(Box::new(arc))
 }
 
 impl Container {
@@ -69,21 +63,19 @@ impl Container {
 
     pub(crate) fn get<T: Clone + Send + Sync + 'static>(&self) -> Result<T> {
         let id = TypeId::of::<T>();
-        if let Some(&resolve) = self.arc_resolvers.get(&id) {
-            let value = self
-                .lookup_value_ref_from(id, self.active_scope)
-                .ok_or_else(|| Error::NotConstructed(type_name::<T>()))?;
-            let boxed = resolve(value)?;
-            let typed = *boxed
-                .downcast::<T>()
-                .map_err(|_| Error::Downcast(type_name::<T>()))?;
-            return Ok(typed);
-        }
-
-        let value = self
+        let stored = self
             .lookup_value_ref_from(id, self.active_scope)
             .ok_or_else(|| Error::NotConstructed(type_name::<T>()))?;
-        downcast_clone::<T>(value)
+        match stored.extract {
+            Some(extract) => {
+                let boxed = extract(&stored.handle)?;
+                let typed = *boxed
+                    .downcast::<T>()
+                    .map_err(|_| Error::Downcast(type_name::<T>()))?;
+                Ok(typed)
+            }
+            None => downcast_clone::<T>(&stored.handle),
+        }
     }
 
     pub(crate) fn store_constructed(
@@ -93,16 +85,35 @@ impl Container {
         scope: ScopeId,
         private: bool,
     ) {
-        if let Some(register) = built.register_arc {
-            register(&mut self.arc_resolvers);
+        if let Some((alias_id, alias_handle, extract)) = built.arc_alias {
+            self.store_value(
+                alias_id,
+                StoredValue {
+                    handle: alias_handle,
+                    extract: Some(extract),
+                },
+                scope,
+                private,
+            );
         }
-        if let Some((alias_id, alias_value)) = built.arc_alias {
-            self.store_value(alias_id, alias_value, scope, private);
-        }
-        self.store_value(id, built.value, scope, private);
+        self.store_value(
+            id,
+            StoredValue {
+                handle: built.value,
+                extract: None,
+            },
+            scope,
+            private,
+        );
     }
 
-    pub(crate) fn store_value(&mut self, id: TypeId, value: DynAny, scope: ScopeId, private: bool) {
+    pub(crate) fn store_value(
+        &mut self,
+        id: TypeId,
+        value: StoredValue,
+        scope: ScopeId,
+        private: bool,
+    ) {
         if private {
             self.mark_private_scope(scope);
             self.values_private.insert((id, scope), value);

@@ -4,13 +4,13 @@ use crate::error::{Error, Result};
 use crate::provide::DynProvider;
 use crate::scope::ScopeId;
 
-use super::types::{GroupElementKey, ProviderKey, TypeIdMap, TypeIdSet};
-use super::{Container, DynAny};
+use super::Container;
+use super::types::{GroupElementKey, ProviderKey, StoredValue, TypeIdMap, TypeIdSet};
 
 impl Container {
     /// Resolve a cached value using the same priority as providers: nearest
     /// private binding up the scope chain, else the public one.
-    pub(crate) fn lookup_value_ref_from(&self, id: TypeId, from: ScopeId) -> Option<&DynAny> {
+    pub(crate) fn lookup_value_ref_from(&self, id: TypeId, from: ScopeId) -> Option<&StoredValue> {
         for scope in self.scopes.ancestors_from(from) {
             if !self.scope_has_private(scope) {
                 continue;

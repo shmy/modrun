@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+* Container: carry the `Arc<T>` extractor on the cached value entry instead of in a separate resolver table, so dependency injection resolves with a single map lookup.
+
 ## [1.1.0] - 2026-09-18
 
 ### Added

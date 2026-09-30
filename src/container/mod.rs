@@ -15,15 +15,16 @@ mod types;
 pub(crate) use group::Groups;
 pub(crate) use storage::{pack, seed_builtins};
 pub(crate) use types::ConstructOut;
-pub(crate) use types::{GroupElementKey, ProviderKey, TypeIdMap, TypeIdSet, ValueNode};
+pub(crate) use types::{
+    GroupElementKey, ProviderKey, StoredValue, TypeIdMap, TypeIdSet, ValueNode,
+};
 
 pub(crate) type DynAny = Arc<dyn Any + Send + Sync>;
-pub(crate) type ArcResolveFn = fn(&DynAny) -> Result<Box<dyn Any + Send + Sync>>;
 
 pub(crate) struct Container {
     pub(crate) scopes: ScopeTree,
-    pub(crate) values_public: TypeIdMap<TypeId, DynAny>,
-    pub(crate) values_private: TypeIdMap<(TypeId, ScopeId), DynAny>,
+    pub(crate) values_public: TypeIdMap<TypeId, StoredValue>,
+    pub(crate) values_private: TypeIdMap<(TypeId, ScopeId), StoredValue>,
     pub(crate) providers: TypeIdMap<ProviderKey, DynProvider>,
     pub(crate) public_index: TypeIdMap<TypeId, ProviderKey>,
     pub(crate) private_alias: TypeIdMap<(TypeId, ScopeId), ProviderKey>,
@@ -32,7 +33,6 @@ pub(crate) struct Container {
     pub(crate) constructing: TypeIdSet<ProviderKey>,
     pub(crate) active_scope: ScopeId,
     pub(crate) layers: Vec<Vec<ProviderKey>>,
-    pub(crate) arc_resolvers: TypeIdMap<TypeId, ArcResolveFn>,
     pub(crate) wave_scratch: Vec<ProviderKey>,
     pub(crate) groups: Groups,
     pub(crate) value_nodes: Vec<ValueNode>,
@@ -57,7 +57,6 @@ impl Container {
             constructing: TypeIdSet::default(),
             active_scope: ScopeId::ROOT,
             layers: Vec::new(),
-            arc_resolvers: TypeIdMap::default(),
             wave_scratch: Vec::new(),
             groups: Groups::default(),
             value_nodes: Vec::new(),

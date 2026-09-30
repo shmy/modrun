@@ -1,10 +1,9 @@
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 
 use crate::future::BoxFuture;
 use crate::scope::ScopeId;
 
 use super::DynAny;
-use crate::container::ArcResolveFn;
 use crate::error;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -66,13 +65,21 @@ impl Hasher for TypeIdHasher {
 pub(crate) type TypeIdMap<K, V> = HashMap<K, V, BuildHasherDefault<TypeIdHasher>>;
 pub(crate) type TypeIdSet<K> = HashSet<K, BuildHasherDefault<TypeIdHasher>>;
 
-pub(crate) type ArcRegisterFn = fn(&mut TypeIdMap<TypeId, ArcResolveFn>);
+/// Recovers a typed handle (`Arc<U>`) out of the stored `Arc<dyn Any>` whose
+/// pointee is `U`.
+pub(crate) type ArcExtractFn = fn(&DynAny) -> error::Result<Box<dyn Any + Send + Sync>>;
+
+/// A cached value. `extract` is `Some` only on the `Arc<U>` alias entry, whose
+/// `handle` points at `U`; it recovers `Arc<U>` without a second map lookup.
+pub(crate) struct StoredValue {
+    pub handle: DynAny,
+    pub extract: Option<ArcExtractFn>,
+}
 
 /// Value produced by a constructor, plus an optional `Arc<T>` alias.
 pub(crate) struct Constructed {
     pub value: DynAny,
-    pub arc_alias: Option<(TypeId, DynAny)>,
-    pub register_arc: Option<ArcRegisterFn>,
+    pub arc_alias: Option<(TypeId, DynAny, ArcExtractFn)>,
 }
 
 pub(crate) type ConstructFuture = BoxFuture<'static, error::Result<Constructed>>;

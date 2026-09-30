@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use std::any::TypeId;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -144,6 +145,17 @@ pub trait Hook: Send + 'static {
     /// [`crate::ModrunBuilder::run`]. Custom hooks that spawn their own work
     /// can store it the same way.
     fn attach_shutdown(&mut self, _shutdown: Shutdowner) {}
+
+    /// Internal fast path used by [`Lifecycle::append`].
+    ///
+    /// Only [`HookFn`] overrides this: its callbacks already produce owned
+    /// `'static` futures, so the lifecycle can run both phases without boxing
+    /// them again. Every other implementor must keep the default (`None`) —
+    /// returning `Some` from anything but `HookFn` is a contract violation.
+    #[doc(hidden)]
+    fn closure_hook(&mut self) -> Option<&mut HookFn> {
+        None
+    }
 }
 
 /// Ad-hoc start/stop callbacks. Prefer implementing [`Hook`] when the two
@@ -229,7 +241,6 @@ impl HookFn {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let f = Arc::new(f);
         self.on_stop = Some(Arc::new(move || Box::pin(f())));
         self
     }
@@ -238,6 +249,10 @@ impl HookFn {
 impl Hook for HookFn {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn closure_hook(&mut self) -> Option<&mut HookFn> {
+        Some(self)
     }
 
     fn has_start(&self) -> bool {
@@ -296,7 +311,74 @@ impl<H: Hook> ErasedHook for H {
 
 struct HookEntry {
     name: &'static str,
-    inner: Option<Box<dyn ErasedHook>>,
+    inner: Option<HookEntryInner>,
+}
+
+/// A registered hook, in the cheapest form its phase futures allow.
+enum HookEntryInner {
+    /// Ad-hoc closures from [`hook`]: their callbacks already yield owned
+    /// `'static` futures, so a phase costs one box (the callback's), not two.
+    Closure {
+        on_start: Option<Callback>,
+        on_stop: Option<StopCallback>,
+    },
+    /// Any other [`Hook`] impl: the phase future borrows the hook, so it has to
+    /// be erased behind a second box.
+    Hook(Box<dyn ErasedHook>),
+}
+
+/// Choose the cheapest stored form for `hook`. [`HookFn`] hands over its
+/// callbacks, which already produce owned `'static` futures; every other impl is
+/// boxed behind [`ErasedHook`] instead.
+fn erase_hook<H: Hook>(mut hook: H) -> HookEntryInner {
+    if let Some(f) = hook.closure_hook() {
+        debug_assert_eq!(
+            TypeId::of::<H>(),
+            TypeId::of::<HookFn>(),
+            "closure_hook must only be overridden by HookFn"
+        );
+        return HookEntryInner::Closure {
+            on_start: f.on_start.take(),
+            on_stop: f.on_stop.take(),
+        };
+    }
+    HookEntryInner::Hook(Box::new(hook))
+}
+
+impl HookEntryInner {
+    fn has_start(&self) -> bool {
+        match self {
+            Self::Closure { on_start, .. } => on_start.is_some(),
+            Self::Hook(hook) => hook.has_start(),
+        }
+    }
+
+    fn has_stop(&self) -> bool {
+        match self {
+            Self::Closure { on_stop, .. } => on_stop.is_some(),
+            Self::Hook(hook) => hook.has_stop(),
+        }
+    }
+
+    fn on_start(&mut self) -> BoxFuture<'_, Result<()>> {
+        match self {
+            Self::Closure { on_start, .. } => match on_start.take() {
+                Some(f) => f(),
+                None => Box::pin(async { Ok(()) }),
+            },
+            Self::Hook(hook) => hook.on_start(),
+        }
+    }
+
+    fn on_stop(&mut self) -> BoxFuture<'_, Result<()>> {
+        match self {
+            Self::Closure { on_stop, .. } => match on_stop.as_ref() {
+                Some(f) => f(),
+                None => Box::pin(async { Ok(()) }),
+            },
+            Self::Hook(hook) => hook.on_stop(),
+        }
+    }
 }
 
 struct InflightHook {
@@ -349,17 +431,12 @@ struct StopGuard {
     lifecycle: Lifecycle,
     idx: usize,
     name: &'static str,
-    hook: Option<Box<dyn ErasedHook>>,
+    hook: Option<HookEntryInner>,
     finished: bool,
 }
 
 impl StopGuard {
-    fn new(
-        lifecycle: Lifecycle,
-        idx: usize,
-        name: &'static str,
-        hook: Box<dyn ErasedHook>,
-    ) -> Self {
+    fn new(lifecycle: Lifecycle, idx: usize, name: &'static str, hook: HookEntryInner) -> Self {
         on_stop_executing(idx, name);
         Self {
             lifecycle,
@@ -479,12 +556,14 @@ impl Lifecycle {
     pub fn append<H: Hook>(&self, mut hook: H) -> Result<()> {
         hook.attach_shutdown(self.shutdown.clone());
         debug_assert!(!hook.name().is_empty(), "hook name must not be empty");
+        let name = hook.name();
+        let inner = erase_hook(hook);
         let mut state = self.state();
         match state.phase {
             Phase::Registering | Phase::Starting => {
                 state.hooks.push(HookEntry {
-                    name: hook.name(),
-                    inner: Some(Box::new(hook)),
+                    name,
+                    inner: Some(inner),
                 });
                 Ok(())
             }
@@ -642,7 +721,7 @@ impl Lifecycle {
     /// it. If that future is cancelled, [`StopGuard`] writes the hook back so a
     /// follow-up unwind can retry it; a timeout abandons the in-flight hook without
     /// a second budget (see caller).
-    fn take_next_stop(&self) -> Option<(usize, &'static str, Box<dyn ErasedHook>)> {
+    fn take_next_stop(&self) -> Option<(usize, &'static str, HookEntryInner)> {
         let mut state = self.state();
         loop {
             if state.started == 0 {
@@ -668,6 +747,23 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::time::sleep;
+
+    #[test]
+    fn closure_hooks_take_the_unboxed_path() {
+        struct Custom;
+
+        impl Hook for Custom {
+            async fn on_start(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        assert!(matches!(
+            erase_hook(hook().on_start(|| async { Ok(()) })),
+            HookEntryInner::Closure { .. }
+        ));
+        assert!(matches!(erase_hook(Custom), HookEntryInner::Hook(_)));
+    }
 
     #[tokio::test]
     async fn stop_guard_writes_back_cancelled_on_stop() {

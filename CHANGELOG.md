@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * Container: carry the `Arc<T>` extractor on the cached value entry instead of in a separate resolver table, so dependency injection resolves with a single map lookup.
+* Lifecycle: store `hook()` closures unboxed so each OnStart/OnStop phase allocates once instead of twice (and drop a redundant `Arc` in `on_stop`). Closure hooks drop from ~7 to ~3 allocations per hook; custom [`Hook`](https://docs.rs/modrun/latest/modrun/trait.Hook.html) impls are unchanged. `Lifecycle::append` is unaffected.
 
 ## [1.1.0] - 2026-09-18
 
